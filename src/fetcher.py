@@ -1,9 +1,11 @@
 """
 Fetch OHLCV from yfinance and attach computed metrics.
 
-Persistence: by default nothing is written to disk. Data lives in memory for the
-current run. Optional JSON/CSV export is explicit (CLI flags, Streamlit download,
-or saving to data/exports/).
+Persistence: optional yfinance OHLCV cache under data/yfinance_cache/ (see
+config). After TTL expiry, new sessions are fetched incrementally from the day
+after the last cached bar, merged with on-disk history, trimmed to the
+requested period, and rounded to two decimal places before pickle export.
+JSON/CSV exports of summaries remain explicit (CLI, Streamlit, data/exports/).
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ import time
 
 from src import config
 from src.metrics import enrich_ohlcv, latest_snapshot_row
-from src.yfinance_cache import get_history, put_history
+from src.yfinance_cache import get_history, put_history, read_stale_history
 
 log = logging.getLogger("stock_qa")
 
@@ -64,6 +66,31 @@ def _fetch_ticker_history_from_network(
     return df
 
 
+def _fetch_incremental_network(symbol: str, stale: pd.DataFrame) -> pd.DataFrame:
+    """Fetch sessions strictly after the last cached date (smaller download than full period)."""
+    if stale.empty:
+        return pd.DataFrame()
+    last = stale.index[-1]
+    start = last + pd.Timedelta(days=1)
+    t = yf.Ticker(symbol)
+    df = t.history(start=start, auto_adjust=False)
+    if df.empty:
+        return df
+    df = df.rename(
+        columns={
+            "Open": "Open",
+            "High": "High",
+            "Low": "Low",
+            "Close": "Close",
+            "Adj Close": "Adj Close",
+            "Volume": "Volume",
+        }
+    )
+    if df.index.tz is not None:
+        df.index = df.index.tz_localize(None)
+    return df
+
+
 def fetch_ticker_history(
     symbol: str,
     period: str = config.DEFAULT_YF_PERIOD,
@@ -74,13 +101,42 @@ def fetch_ticker_history(
         log.info("[fetch]    %s: cache hit (%d rows)", symbol, len(cached))
         return cached
     t0 = time.perf_counter()
-    df = _fetch_ticker_history_from_network(symbol, period)
+    stale = read_stale_history(symbol, period)
+    df: pd.DataFrame
+    if stale is not None and not stale.empty:
+        try:
+            inc = _fetch_incremental_network(symbol, stale)
+            if inc.empty:
+                df = stale
+                log.info(
+                    "[fetch]    %s: incremental fetch empty, reusing %d cached rows",
+                    symbol,
+                    len(stale),
+                )
+            else:
+                df = inc
+                log.info(
+                    "[fetch]    %s: incremental fetch +%d new session(s) (merge on save)",
+                    symbol,
+                    len(inc),
+                )
+        except Exception as e:  # noqa: BLE001
+            log.warning(
+                "[fetch]    %s: incremental fetch failed (%s) — full period download",
+                symbol,
+                e,
+            )
+            df = _fetch_ticker_history_from_network(symbol, period)
+    else:
+        df = _fetch_ticker_history_from_network(symbol, period)
     elapsed = time.perf_counter() - t0
     if not df.empty:
-        put_history(symbol, period, df)
+        df = put_history(symbol, period, df)
         log.info(
-            "[fetch]    %s: network fetch → %d rows (%.1fs)",
-            symbol, len(df), elapsed,
+            "[fetch]    %s: stored → %d rows (%.1fs)",
+            symbol,
+            len(df),
+            elapsed,
         )
     else:
         log.warning("[fetch]    %s: empty history (%.1fs)", symbol, elapsed)
@@ -94,9 +150,13 @@ def _clean_scalar(val: Any) -> Any:
         return None
     if hasattr(val, "item"):
         try:
-            return val.item()
+            val = val.item()
         except Exception:
             pass
+    if isinstance(val, (float, np.floating)):
+        if pd.isna(val):
+            return None
+        return round(float(val), 2)
     if isinstance(val, (pd.Timestamp,)):
         return val.isoformat()
     return val
