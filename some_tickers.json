@@ -1,0 +1,277 @@
+{
+  "MTUM": {
+    "label": "MTUM",
+    "description": "iShares MSCI USA Momentum Factor ETF",
+    "aliases": ["momentum etf"]
+  },
+  "MARA": {
+    "label": "MARA",
+    "description": "Marathon Digital Holdings, Inc.",
+    "aliases": ["marathon", "marathon digital"]
+  },
+  "ARM": {
+    "label": "ARM",
+    "description": "ARM Holdings plc"
+  },
+  "NVDA": {
+    "label": "NVDA",
+    "description": "NVIDIA Corporation",
+    "aliases": ["nvidia"]
+  },
+  "MU": {
+    "label": "MU",
+    "description": "Micron Technology, Inc.",
+    "aliases": ["micron"]
+  },
+  "INTC": {
+    "label": "INTC",
+    "description": "Intel Corporation",
+    "aliases": ["intel"]
+  },
+  "ASML": {
+    "label": "ASML",
+    "description": "ASML Holding N.V."
+  },
+  "LRCX": {
+    "label": "LRCX",
+    "description": "Lam Research Corporation",
+    "aliases": ["lam research"]
+  },
+  "AMAT": {
+    "label": "AMAT",
+    "description": "Applied Materials, Inc.",
+    "aliases": ["applied materials"]
+  },
+  "PANW": {
+    "label": "PANW",
+    "description": "Palo Alto Networks, Inc.",
+    "aliases": ["palo alto", "palo alto networks"]
+  },
+  "CRWD": {
+    "label": "CRWD",
+    "description": "CrowdStrike Holdings, Inc.",
+    "aliases": ["crowdstrike"]
+  },
+  "AIR": {
+    "label": "AIR",
+    "description": "AAR Corp."
+  },
+  "BA": {
+    "label": "BA",
+    "description": "The Boeing Company",
+    "aliases": ["boeing"]
+  },
+  "XOM": {
+    "label": "XOM",
+    "description": "Exxon Mobil Corporation",
+    "aliases": ["exxon", "exxon mobil"]
+  },
+  "KO": {
+    "label": "KO",
+    "description": "The Coca-Cola Company",
+    "aliases": ["coca-cola", "coca cola", "coke"]
+  },
+  "HEIA.AS": {
+    "label": "HEIN",
+    "description": "Heineken N.V.",
+    "aliases": ["heineken"]
+  },
+  "MC.PA": {
+    "label": "LVMH",
+    "description": "LVMH Moët Hennessy Louis Vuitton SE",
+    "aliases": ["lvmh", "louis vuitton"]
+  },
+  "OR.PA": {
+    "label": "OREP",
+    "description": "L'Oréal S.A.",
+    "aliases": ["loreal", "l'oreal"]
+  },
+  "LLY": {
+    "label": "LLY",
+    "description": "Eli Lilly and Company",
+    "aliases": ["eli lilly", "lilly"]
+  },
+  "SHLD": {
+    "label": "SHLD",
+    "description": "Global X Defense Tech ETF",
+    "aliases": ["defense etf"]
+  },
+  "PLTR": {
+    "label": "PLTR",
+    "description": "Palantir Technologies Inc.",
+    "aliases": ["palantir"]
+  },
+  "AI": {
+    "label": "AI",
+    "description": "C3.ai, Inc.",
+    "aliases": ["c3.ai", "c3ai"]
+  },
+  "JPM": {
+    "label": "JPM",
+    "description": "JPMorgan Chase & Co.",
+    "aliases": ["jpmorgan", "jp morgan", "chase"]
+  },
+  "DAL": {
+    "label": "DAL",
+    "description": "Delta Air Lines, Inc.",
+    "aliases": ["delta airlines", "delta air"]
+  },
+  "MRVL": {
+    "label": "MRVL",
+    "description": "Marvell Technology, Inc.",
+    "aliases": ["marvell"]
+  },
+  "PFE": {
+    "label": "PFE",
+    "description": "Pfizer Inc.",
+    "aliases": ["pfizer"]
+  },
+  "IBKR": {
+    "label": "IBKR",
+    "description": "Interactive Brokers Group, Inc.",
+    "aliases": ["interactive brokers"]
+  },
+  "BMY": {
+    "label": "BMY",
+    "description": "Bristol-Myers Squibb Company",
+    "aliases": ["bristol-myers", "bristol myers"]
+  },
+  "^GSPC": {
+    "label": "S&P500",
+    "description": "S&P 500",
+    "aliases": ["s&p", "s&p500", "sp500", "s&p 500"]
+  },
+  "^NDX": {
+    "label": "NASDAQ100",
+    "description": "NASDAQ 100",
+    "aliases": ["nasdaq", "nasdaq100", "nasdaq 100"]
+  },
+  "^VIX": {
+    "label": "VIX",
+    "description": "CBOE Volatility Index",
+    "aliases": ["vix"]
+  },
+  "KTOS": {
+    "label": "KTOS",
+    "description": "Kratos Defense & Security Solutions, Inc.",
+    "aliases": ["kratos"]
+  },
+  "ONDS": {
+    "label": "ONDS",
+    "description": "Ondas Holdings Inc.",
+    "aliases": ["ondas"]
+  },
+  "VUZI": {
+    "label": "VUZI",
+    "description": "Vuzix Corporation",
+    "aliases": ["vuzix"]
+  },
+  "RZLV": {
+    "label": "RZLV",
+    "description": "Rezolve Group, Inc.",
+    "aliases": ["rezolve"]
+  },
+  "SGLD.L": {
+    "label": "SGLD.L",
+    "description": "Gold",
+    "aliases": ["gold"]
+  },
+  "ISLN.L": {
+    "label": "ISLN.L",
+    "description": "Silver",
+    "aliases": ["silver"]
+  },
+  "QUAL": {
+    "label": "QUAL",
+    "description": "Qual"
+  },
+  "SOUN": {
+    "label": "SOUN",
+    "description": "SoundHound",
+    "aliases": ["soundhound"]
+  },
+  "RKLB": {
+    "label": "RKLB",
+    "description": "Rocket Lab USA, Inc.",
+    "aliases": ["rocket lab"]
+  },
+  "QBTS": {
+    "label": "QBTS",
+    "description": "D-Wave Quantum Inc.",
+    "aliases": ["d-wave", "dwave"]
+  },
+  "IONQ": {
+    "label": "IONQ",
+    "description": "IonQ, Inc."
+  },
+  "LPTH": {
+    "label": "LPTH",
+    "description": "LightPath Technologies, Inc.",
+    "aliases": ["lightpath"]
+  },
+  "MP": {
+    "label": "MP",
+    "description": "MP Materials Corp.",
+    "aliases": ["mp materials"]
+  },
+  "SMR": {
+    "label": "SMR",
+    "description": "NuScale Power Corporation",
+    "aliases": ["nuscale"]
+  },
+  "OKLO": {
+    "label": "OKLO",
+    "description": "Oklo Inc."
+  },
+  "UAMY": {
+    "label": "UAMY",
+    "description": "United States Antimony Corporation"
+  },
+  "USAR": {
+    "label": "USAR",
+    "description": "USAR"
+  },
+  "SYM": {
+    "label": "SYM",
+    "description": "Symbotic Inc.",
+    "aliases": ["symbotic"]
+  },
+  "AMPX": {
+    "label": "AMPX",
+    "description": "Amprius Technologies, Inc.",
+    "aliases": ["amprius"]
+  },
+  "AEVA": {
+    "label": "AEVA",
+    "description": "Aeva Technologies, Inc."
+  },
+  "INDI": {
+    "label": "INDI",
+    "description": "Indie Semiconductor, Inc.",
+    "aliases": ["indie semiconductor"]
+  },
+  "BBAI": {
+    "label": "BBAI",
+    "description": "BigBear.ai Holdings, Inc.",
+    "aliases": ["bigbear"]
+  },
+  "IREN": {
+    "label": "IREN",
+    "description": "IREN S.p.A."
+  },
+  "PATH": {
+    "label": "PATH",
+    "description": "UiPath, Inc.",
+    "aliases": ["uipath"]
+  },
+  "JOBY": {
+    "label": "JOBY",
+    "description": "Joby Aviation, Inc.",
+    "aliases": ["joby aviation"]
+  },
+  "ACHR": {
+    "label": "ACHR",
+    "description": "Archer Aviation Inc.",
+    "aliases": ["archer", "archer aviation"]
+  }
+}

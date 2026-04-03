@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+env/
+
+# Local data and secrets
+data/
+.env
+.env.*
+
+# Ad-hoc metric exports (use data/exports/ for snapshots you care about)
+/metrics.json
+/metrics_last.csv
+
+# IDE
+.idea/
+.vscode/
