@@ -137,11 +137,23 @@ Open the local URL shown by Streamlit.
 
 ## Environment Flags
 
+Create a `.env` file in the project root (gitignored). See `.env.example` for placeholders.
+
+- `FRED_API_KEY`
+  - St. Louis Fed API key for optional macro series in the prompt (`economic_context`).
+  - **`fred_series.json`**: lean set — `always` series (Fed funds, 10Y, yield-curve spread) attach to **every resolved-ticker** question; extra series use `"sectors"` when tickers match (see optional **`fred_sectors`** on entries in `some_tickers.json`, plus label/description keyword inference).
+- `USE_FRED` (default on in the UI unless set to `0`)
+  - `0`: Streamlit sidebar default can still be toggled; CLI respects `--no-fred`.
+- `FRED_CACHE_TTL_SECONDS` (default `3600`)
+  - Disk cache TTL under `data/fred_cache/` (ignored by git with `data/`).
+
 Useful runtime controls:
 
 - `PROMPT_ONLY` (default in UI: `1`)
   - `1`: skip local Ollama chat answer; build/export prompt only.
   - `0`: allow local answer generation in addition to export.
+- `USE_RAG` (default `0` in Streamlit sidebar checkbox)
+  - `1`: enable Chroma RAG (requires Ollama for embeddings). Off by default so the prompt-export path does not depend on Ollama.
 - `INDEX_RAG_EACH_ASK` (default `0`)
   - `1`: index fetched metrics into Chroma on every question (slower).
 - `SKIP_YF_WARM` (default `0`)
@@ -166,7 +178,8 @@ The generated user content is a fenced `json` payload with fields like:
 - `schema_version`
 - `current_question`
 - `symbols_universe`
-- `live_market_data` (authoritative metrics; do not alter)
+- `live_market_data` (authoritative equity metrics; do not alter)
+- `economic_context` (when present: FRED macro series; authoritative for those numbers)
 - `retrieval_background`
 - `session_summary` (included only when needed to avoid duplication)
 - `indexing_note` (when applicable)

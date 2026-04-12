@@ -11,6 +11,7 @@ env/
 data/
 .env
 .env.*
+!.env.example
 
 # Ad-hoc metric exports (use data/exports/ for snapshots you care about)
 /metrics.json

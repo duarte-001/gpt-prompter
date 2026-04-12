@@ -40,6 +40,7 @@ def cmd_ask(args: argparse.Namespace) -> None:
         embedding_model=args.embed_model,
         use_rag=not args.no_rag,
         index_metrics_to_rag=args.index_rag,
+        use_fred=not args.no_fred,
     )
     if res.error:
         print(res.error, file=sys.stderr)
@@ -119,6 +120,11 @@ def main() -> None:
         "--index-rag",
         action="store_true",
         help="After fetch, upsert live metrics chunks into Chroma",
+    )
+    p_ask.add_argument(
+        "--no-fred",
+        action="store_true",
+        help="Do not fetch St. Louis Fed (FRED) macro context",
     )
 
     p_fetch = sub.add_parser("fetch", help="Download OHLCV and compute metrics (default: some_tickers.json)")

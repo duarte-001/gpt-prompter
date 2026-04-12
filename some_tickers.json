@@ -64,7 +64,8 @@
   "XOM": {
     "label": "XOM",
     "description": "Exxon Mobil Corporation",
-    "aliases": ["exxon", "exxon mobil"]
+    "aliases": ["exxon", "exxon mobil"],
+    "fred_sectors": ["energy"]
   },
   "KO": {
     "label": "KO",
@@ -109,7 +110,8 @@
   "JPM": {
     "label": "JPM",
     "description": "JPMorgan Chase & Co.",
-    "aliases": ["jpmorgan", "jp morgan", "chase"]
+    "aliases": ["jpmorgan", "jp morgan", "chase"],
+    "fred_sectors": ["financials"]
   },
   "DAL": {
     "label": "DAL",
@@ -129,7 +131,8 @@
   "IBKR": {
     "label": "IBKR",
     "description": "Interactive Brokers Group, Inc.",
-    "aliases": ["interactive brokers"]
+    "aliases": ["interactive brokers"],
+    "fred_sectors": ["financials"]
   },
   "BMY": {
     "label": "BMY",
@@ -217,11 +220,13 @@
   "SMR": {
     "label": "SMR",
     "description": "NuScale Power Corporation",
-    "aliases": ["nuscale"]
+    "aliases": ["nuscale"],
+    "fred_sectors": ["energy"]
   },
   "OKLO": {
     "label": "OKLO",
-    "description": "Oklo Inc."
+    "description": "Oklo Inc.",
+    "fred_sectors": ["energy"]
   },
   "UAMY": {
     "label": "UAMY",
@@ -257,7 +262,8 @@
   },
   "IREN": {
     "label": "IREN",
-    "description": "IREN S.p.A."
+    "description": "IREN S.p.A.",
+    "fred_sectors": ["energy"]
   },
   "PATH": {
     "label": "PATH",

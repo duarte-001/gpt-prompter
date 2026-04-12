@@ -4,11 +4,18 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Tuple
+
+from dotenv import load_dotenv
 
 # Project root (parent of src/)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# Load `.env` from project root (never commit secrets; `.gitignore` covers `.env`).
+# override=True: a blank `FRED_API_KEY` in the parent environment must not block the file.
+load_dotenv(PROJECT_ROOT / ".env", override=True)
 
 # Local data (exports, future RAG/Chroma); created on demand
 DATA_DIR = PROJECT_ROOT / "data"
@@ -75,6 +82,113 @@ ROLLING_DAYS = 20
 # RSI period (Wilder)
 RSI_PERIOD = 14
 
+# FRED macro series (see fred_series.json); API key from .env or environment
+FRED_SERIES_JSON = PROJECT_ROOT / "fred_series.json"
+FRED_CACHE_DIR = DATA_DIR / "fred_cache"
+FRED_CACHE_TTL_SECONDS = int(os.environ.get("FRED_CACHE_TTL_SECONDS", "3600"))
+MAX_FRED_SERIES_PER_QUESTION = 8
+
+
+def _read_fred_key_from_dotenv_file() -> str:
+    """Fallback if os.environ is empty (BOM, UTF-16, or load order issues)."""
+    path = PROJECT_ROOT / ".env"
+    if not path.is_file():
+        return ""
+    try:
+        raw = path.read_text(encoding="utf-8-sig")
+    except OSError:
+        return ""
+    for line in raw.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        if s.startswith("FRED_API_KEY"):
+            _, _, rest = s.partition("=")
+            val = rest.strip().strip('"').strip("'")
+            return val
+    return ""
+
+
+def fred_api_key() -> str:
+    k = os.environ.get("FRED_API_KEY", "").strip()
+    if k:
+        return k
+    return _read_fred_key_from_dotenv_file().strip()
+
+
+def fred_api_key_line_empty_in_dotenv() -> bool:
+    """True if `.env` has `FRED_API_KEY=` with no value (common when the file is open but not saved)."""
+    path = PROJECT_ROOT / ".env"
+    if not path.is_file():
+        return False
+    try:
+        raw = path.read_text(encoding="utf-8-sig")
+    except OSError:
+        return False
+    for line in raw.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        if s.upper().startswith("FRED_API_KEY"):
+            _, _, rest = s.partition("=")
+            return not rest.strip()
+    return False
+
+
+@dataclass(frozen=True)
+class FredSeriesDef:
+    series_id: str
+    label: str
+    always: bool
+    keywords: tuple[str, ...]
+    # Pipeline sector keys (see SECTOR_KEYWORDS); include this series when any match inferred tickers
+    sectors: tuple[str, ...]
+
+
+def load_fred_series_registry(path: Path | None = None) -> List[FredSeriesDef]:
+    """
+    Load FRED series registry from JSON.
+
+    Supported shape: array of objects:
+      {"series_id": "...", "label": "...", "always": false,
+       "keywords": ["..."], "sectors": ["energy", "financials"]}
+    """
+    p = path or FRED_SERIES_JSON
+    if not p.is_file():
+        return []
+    raw = json.loads(p.read_text(encoding="utf-8"))
+    if not isinstance(raw, list):
+        raise ValueError("fred_series.json must be a JSON array")
+    out: list[FredSeriesDef] = []
+    for i, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ValueError(f"fred_series.json entry {i} must be an object")
+        sid = str(item.get("series_id", "")).strip()
+        if not sid:
+            raise ValueError(f"fred_series.json entry {i} missing series_id")
+        label = str(item.get("label", sid)).strip() or sid
+        always = bool(item.get("always", False))
+        kws = item.get("keywords", [])
+        if kws is None:
+            kws_t: tuple[str, ...] = ()
+        elif isinstance(kws, list):
+            kws_t = tuple(str(k).lower() for k in kws if str(k).strip())
+        else:
+            raise ValueError(f"fred_series.json entry {i}: keywords must be a list or null")
+        sec = item.get("sectors", [])
+        if sec is None:
+            sec_t: tuple[str, ...] = ()
+        elif isinstance(sec, list):
+            sec_t = tuple(str(s).strip() for s in sec if str(s).strip())
+        else:
+            raise ValueError(f"fred_series.json entry {i}: sectors must be a list or null")
+        out.append(
+            FredSeriesDef(
+                series_id=sid, label=label, always=always, keywords=kws_t, sectors=sec_t,
+            ),
+        )
+    return out
+
 
 def load_ticker_mapping(path: Path | None = None) -> Dict[str, Tuple[str, str]]:
     """
@@ -111,6 +225,30 @@ def load_ticker_mapping(path: Path | None = None) -> Dict[str, Tuple[str, str]]:
             out[key] = (str(val[0]), str(val[1]))
         else:
             raise ValueError(f"Invalid entry for {key!r}: expected object or [label, description]")
+    return out
+
+
+def load_ticker_fred_sectors(path: Path | None = None) -> Dict[str, Tuple[str, ...]]:
+    """
+    Optional per-ticker FRED sector tags from the same JSON as tickers.
+
+    Entry shape: { "XOM": { ..., "fred_sectors": ["energy"] }, ... }
+    Keys must match SECTOR_KEYWORDS in pipeline (e.g. energy, financials).
+    """
+    p = path or TICKERS_JSON
+    raw = json.loads(p.read_text(encoding="utf-8"))
+    out: Dict[str, Tuple[str, ...]] = {}
+    if not isinstance(raw, dict):
+        return out
+    for sym, val in raw.items():
+        if not isinstance(val, dict):
+            continue
+        fs = val.get("fred_sectors")
+        if not fs:
+            continue
+        if not isinstance(fs, (list, tuple)):
+            raise ValueError(f"fred_sectors for {sym!r} must be a list")
+        out[str(sym)] = tuple(str(x).strip() for x in fs if str(x).strip())
     return out
 
 
