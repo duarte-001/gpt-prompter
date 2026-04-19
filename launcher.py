@@ -13,7 +13,6 @@ import logging
 import os
 import shutil
 import signal
-import socket
 import subprocess
 import sys
 import tempfile
@@ -119,18 +118,23 @@ def _setup_logging() -> None:
     _log.addHandler(handler)
 
 
-def _port_open(host: str, port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(0.3)
-        return s.connect_ex((host, port)) == 0
+def _server_ready(url: str) -> bool:
+    """Return True when *url* responds with HTTP 200 (not just a TCP accept)."""
+    from urllib.request import urlopen
+    from urllib.error import URLError
+    try:
+        with urlopen(url, timeout=2) as resp:
+            return resp.status == 200
+    except (URLError, OSError, ValueError):
+        return False
 
 
-def _wait_for_server(host: str, port: int, timeout: float) -> bool:
+def _wait_for_server(url: str, timeout: float) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if _port_open(host, port):
+        if _server_ready(url):
             return True
-        time.sleep(0.25)
+        time.sleep(0.5)
     return False
 
 
@@ -304,8 +308,8 @@ def main() -> None:
 
     signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
 
-    if not _wait_for_server(_HOST, _PORT, _STARTUP_TIMEOUT):
-        reason = "Streamlit did not respond within 60 s"
+    if not _wait_for_server(_URL, _STARTUP_TIMEOUT):
+        reason = "Streamlit did not respond with HTTP 200 within 60 s"
         if proc is not None and proc.poll() is not None:
             reason = f"Streamlit process exited early (code {proc.returncode})"
         _log.error("Server wait failed: %s", reason)
