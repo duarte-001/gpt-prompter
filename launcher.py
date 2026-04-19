@@ -97,6 +97,30 @@ def _start_streamlit_subprocess() -> subprocess.Popen:
     )
 
 
+def _open_browser_and_block_until_interrupt() -> None:
+    """Last resort when pywebview cannot start (e.g. missing .NET). Keeps Streamlit alive."""
+    import ctypes
+    import webbrowser
+
+    webbrowser.open(_URL)
+    if _is_frozen() and sys.platform == "win32":
+        ctypes.windll.user32.MessageBoxW(
+            0,
+            "The native window could not be started, so the app was opened in your default browser.\n\n"
+            "When you are finished, end StockAssistant.exe from Task Manager (Details tab).",
+            "Stock Assistant",
+            0x40,
+        )
+    stop = threading.Event()
+
+    def _on_sigint(*_: object) -> None:
+        stop.set()
+
+    signal.signal(signal.SIGINT, _on_sigint)
+    while not stop.is_set():
+        time.sleep(1)
+
+
 def _start_streamlit_inprocess() -> threading.Thread:
     """Run the Streamlit server in a daemon thread (used in frozen .exe builds).
 
@@ -137,7 +161,10 @@ def main() -> None:
             subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--skip-update"])
             sys.exit(0)
 
-    import webview
+    # PyInstaller's one-file/one-dir host confuses pythonnet's default .NET Framework loader
+    # (clr_loader/netfx). CoreCLR avoids that and matches modern pywebview backends.
+    if _is_frozen():
+        os.environ.setdefault("PYTHONNET_RUNTIME", "coreclr")
 
     proc = None
     if _is_frozen():
@@ -156,14 +183,22 @@ def main() -> None:
 
     icon_path = str(_ICON) if _ICON.exists() else None
 
-    webview.create_window(
-        "Stock Assistant",
-        _URL,
-        width=1200,
-        height=820,
-        min_size=(800, 500),
-    )
-    webview.start(icon=icon_path)
+    try:
+        import webview
+
+        webview.create_window(
+            "Stock Assistant",
+            _URL,
+            width=1200,
+            height=820,
+            min_size=(800, 500),
+        )
+        webview.start(icon=icon_path)
+    except Exception:
+        if _is_frozen():
+            _open_browser_and_block_until_interrupt()
+        else:
+            raise
 
     if proc:
         _kill_proc(proc)
