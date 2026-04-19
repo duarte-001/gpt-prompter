@@ -152,24 +152,77 @@ def _check_for_updates() -> bool:
         return False
 
 
-def _ensure_dotnet_root_for_pythonnet() -> None:
-    """Point DOTNET_ROOT at a real .NET host so pythonnet can use CoreCLR (avoids flaky netfx)."""
+def _refresh_windows_path_from_registry() -> None:
+    """Re-merge machine + user PATH so `shutil.which("dotnet")` matches Explorer/shell behavior."""
     if sys.platform != "win32":
         return
-    if os.environ.get("DOTNET_ROOT"):
-        return
+    import winreg
+
+    chunks: list[str] = []
+    for hive, subkey in (
+        (winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
+        (winreg.HKEY_CURRENT_USER, r"Environment"),
+    ):
+        try:
+            with winreg.OpenKey(hive, subkey) as key:
+                path_val, _ = winreg.QueryValueEx(key, "PATH")
+        except OSError:
+            continue
+        if path_val and isinstance(path_val, str):
+            chunks.append(path_val)
+    if chunks:
+        os.environ["PATH"] = ";".join(chunks) + ";" + os.environ.get("PATH", "")
+
+
+def _dotnet_install_locations_from_registry() -> list[Path]:
+    """Return candidate dotnet roots from the .NET installer registry (works when PATH has no dotnet)."""
+    if sys.platform != "win32":
+        return []
+    import winreg
+
+    out: list[Path] = []
+    pairs = [
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\dotnet\Setup\InstalledVersions\x64"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\dotnet\Setup\InstalledVersions\x64"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\dotnet\Setup\InstalledVersions\x86"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\dotnet\Setup\InstalledVersions\x86"),
+        (winreg.HKEY_CURRENT_USER, r"SOFTWARE\dotnet\Setup\InstalledVersions\x64"),
+        (winreg.HKEY_CURRENT_USER, r"SOFTWARE\dotnet\Setup\InstalledVersions\x86"),
+    ]
+    for hive, subkey in pairs:
+        try:
+            with winreg.OpenKey(hive, subkey) as key:
+                loc, _ = winreg.QueryValueEx(key, "InstallLocation")
+        except OSError:
+            continue
+        if isinstance(loc, str) and loc.strip():
+            out.append(Path(loc.strip().rstrip("\\/")))
+    return out
+
+
+def _discover_dotnet_install_root() -> Path | None:
+    """Find a directory containing dotnet.exe (CoreCLR host). None if nothing usable."""
+    if sys.platform != "win32":
+        return None
+
+    _refresh_windows_path_from_registry()
+
     dotnet_exe = shutil.which("dotnet")
     if dotnet_exe:
         root = Path(dotnet_exe).resolve().parent
         if (root / "dotnet.exe").exists():
-            os.environ["DOTNET_ROOT"] = str(root)
-            return
+            return root
+
+    for reg_root in _dotnet_install_locations_from_registry():
+        if (reg_root / "dotnet.exe").exists():
+            return reg_root.resolve()
+
     la = os.environ.get("LOCALAPPDATA")
     if la:
         user_root = Path(la) / "Microsoft" / "dotnet"
         if (user_root / "dotnet.exe").exists():
-            os.environ["DOTNET_ROOT"] = str(user_root.resolve())
-            return
+            return user_root.resolve()
+
     pf = os.environ.get("ProgramFiles", r"C:\Program Files")
     pfx86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
     for base in (
@@ -179,8 +232,24 @@ def _ensure_dotnet_root_for_pythonnet() -> None:
         Path(r"C:\Program Files (x86)\dotnet"),
     ):
         if (base / "dotnet.exe").exists():
-            os.environ["DOTNET_ROOT"] = str(base.resolve())
-            return
+            return base.resolve()
+    return None
+
+
+def _prime_pythonnet_coreclr(dotnet_root: Path) -> bool:
+    """Select CoreCLR before `import clr` so pythonnet never sticks on a broken netfx runtime."""
+    root_s = str(dotnet_root.resolve())
+    os.environ["DOTNET_ROOT"] = root_s
+    os.environ["PYTHONNET_RUNTIME"] = "coreclr"
+    try:
+        from clr_loader import get_coreclr
+        from pythonnet import set_runtime
+
+        set_runtime(get_coreclr(dotnet_root=root_s))
+    except Exception:
+        _log.warning("pythonnet CoreCLR pre-init failed:\n%s", traceback.format_exc())
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -289,11 +358,12 @@ def main() -> None:
             subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--skip-update"])
             sys.exit(0)
 
-    if _is_frozen():
-        _ensure_dotnet_root_for_pythonnet()
-        if os.environ.get("DOTNET_ROOT"):
-            os.environ.setdefault("PYTHONNET_RUNTIME", "coreclr")
+    if _is_frozen() and sys.platform == "win32":
+        dotnet_root = _discover_dotnet_install_root()
+        if dotnet_root:
+            _prime_pythonnet_coreclr(dotnet_root)
         else:
+            os.environ.pop("DOTNET_ROOT", None)
             os.environ.pop("PYTHONNET_RUNTIME", None)
         _log.info(
             "DOTNET_ROOT=%r PYTHONNET_RUNTIME=%r",
