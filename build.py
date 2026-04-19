@@ -2,7 +2,8 @@
 Build a standalone StockAssistant.exe using PyInstaller.
 
 Usage:
-    python build.py
+    python build.py            # windowed (no console)
+    python build.py --debug    # console visible for diagnostics
 
 A dedicated clean venv (.venv-build) is used automatically so that only
 the app's actual dependencies end up in the bundle (not any globally
@@ -17,6 +18,8 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
+
+_DEBUG_BUILD = "--debug" in sys.argv
 
 _ROOT = Path(__file__).resolve().parent
 
@@ -110,7 +113,7 @@ def _write_spec() -> None:
             bootloader_ignore_signals=False,
             strip=False,
             upx=True,
-            console=False,
+            console={_DEBUG_BUILD},
             icon='{_q(_ROOT / "assets" / "icon.ico")}',
         )
 
