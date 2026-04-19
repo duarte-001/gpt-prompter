@@ -124,7 +124,7 @@ def _write_spec() -> None:
             a.datas,
             strip=False,
             upx=True,
-            upx_exclude=[],
+            upx_exclude=['Python.Runtime.dll'],
             name='StockAssistant',
         )
     """)

@@ -11,6 +11,7 @@ from __future__ import annotations
 import atexit
 import logging
 import os
+import shutil
 import signal
 import socket
 import subprocess
@@ -152,11 +153,23 @@ def _check_for_updates() -> bool:
 
 
 def _ensure_dotnet_root_for_pythonnet() -> None:
-    """clr_loader/coreclr needs DOTNET_ROOT; frozen GUI apps may not inherit a full shell PATH."""
+    """Point DOTNET_ROOT at a real .NET host so pythonnet can use CoreCLR (avoids flaky netfx)."""
     if sys.platform != "win32":
         return
     if os.environ.get("DOTNET_ROOT"):
         return
+    dotnet_exe = shutil.which("dotnet")
+    if dotnet_exe:
+        root = Path(dotnet_exe).resolve().parent
+        if (root / "dotnet.exe").exists():
+            os.environ["DOTNET_ROOT"] = str(root)
+            return
+    la = os.environ.get("LOCALAPPDATA")
+    if la:
+        user_root = Path(la) / "Microsoft" / "dotnet"
+        if (user_root / "dotnet.exe").exists():
+            os.environ["DOTNET_ROOT"] = str(user_root.resolve())
+            return
     pf = os.environ.get("ProgramFiles", r"C:\Program Files")
     pfx86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
     for base in (
