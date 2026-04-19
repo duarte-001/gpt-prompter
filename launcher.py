@@ -129,9 +129,11 @@ def _server_ready(url: str) -> bool:
         return False
 
 
-def _wait_for_server(url: str, timeout: float) -> bool:
+def _wait_for_server(url: str, timeout: float, proc: subprocess.Popen | None = None) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        if proc is not None and proc.poll() is not None:
+            return False
         if _server_ready(url):
             return True
         time.sleep(0.5)
@@ -145,6 +147,38 @@ def _kill_proc(proc: subprocess.Popen) -> None:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
+
+
+def _kill_stale_on_port(host: str, port: int) -> None:
+    """Kill any process still listening on *host*:*port* (leftover from a previous run)."""
+    if sys.platform != "win32":
+        return
+    try:
+        out = subprocess.check_output(
+            ["netstat", "-ano", "-p", "TCP"],
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            text=True,
+            timeout=5,
+        )
+    except Exception:
+        return
+    target = f"{host}:{port}"
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) >= 5 and target in parts[1] and parts[3] == "LISTENING":
+            pid = int(parts[4])
+            if pid == os.getpid():
+                continue
+            _log.info("Killing stale process on %s (pid %d)", target, pid)
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/PID", str(pid)],
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    capture_output=True,
+                    timeout=5,
+                )
+            except Exception:
+                pass
 
 
 def _check_for_updates() -> bool:
@@ -267,17 +301,26 @@ def _streamlit_worker_entry() -> None:
     st_run(str(_STREAMLIT_SCRIPT), False, [], _streamlit_flag_options())
 
 
+def _worker_log_path() -> Path:
+    return _win_local_appdata_dir() / "streamlit_worker.log" if sys.platform == "win32" else _frozen_fallback_log().with_name("streamlit_worker.log")
+
+
 def _start_streamlit_frozen_worker() -> subprocess.Popen:
     """Re-launch same .exe with --streamlit-worker (Streamlit cannot run in a daemon thread)."""
     _apply_streamlit_env()
     _log.info("Starting Streamlit worker subprocess …")
-    return subprocess.Popen(
+    wlog = _worker_log_path()
+    wlog.parent.mkdir(parents=True, exist_ok=True)
+    wlog_fh = open(wlog, "w", encoding="utf-8")
+    proc = subprocess.Popen(
         [sys.executable, "--streamlit-worker"],
         cwd=str(Path(sys.executable).resolve().parent),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=wlog_fh,
+        stderr=subprocess.STDOUT,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
+    _log.info("Worker log: %s", wlog)
+    return proc
 
 
 # ---------------------------------------------------------------------------
@@ -292,6 +335,8 @@ def main() -> None:
         if _check_for_updates():
             subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--skip-update"])
             sys.exit(0)
+
+    _kill_stale_on_port(_HOST, _PORT)
 
     proc = None
     if _is_frozen():
@@ -308,10 +353,17 @@ def main() -> None:
 
     signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
 
-    if not _wait_for_server(_URL, _STARTUP_TIMEOUT):
+    if not _wait_for_server(_URL, _STARTUP_TIMEOUT, proc):
         reason = "Streamlit did not respond with HTTP 200 within 60 s"
         if proc is not None and proc.poll() is not None:
             reason = f"Streamlit process exited early (code {proc.returncode})"
+            wlog = _worker_log_path() if _is_frozen() else None
+            if wlog and wlog.exists():
+                try:
+                    tail = wlog.read_text(encoding="utf-8", errors="replace")[-2000:]
+                    reason += f"\nWorker log tail:\n{tail}"
+                except OSError:
+                    pass
         _log.error("Server wait failed: %s", reason)
         if proc:
             _kill_proc(proc)
