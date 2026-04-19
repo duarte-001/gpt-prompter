@@ -14,6 +14,7 @@ Output:  dist/StockAssistant/StockAssistant.exe  (one-dir mode)
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -30,12 +31,49 @@ _BUILD_VENV = _ROOT / ".venv-build"
 _BUILD_PYTHON = _BUILD_VENV / "Scripts" / "python.exe"
 
 
+def _bootstrap_pip_into_venv(py_exe: Path) -> None:
+    """Install pip when `python -m venv --without-pip` was used (ensurepip often fails under OneDrive)."""
+    import tempfile
+    import urllib.request
+
+    url = "https://bootstrap.pypa.io/get-pip.py"
+    with tempfile.NamedTemporaryFile(suffix="_get-pip.py", delete=False) as f:
+        tmp = Path(f.name)
+    try:
+        with urllib.request.urlopen(url, timeout=120) as resp:
+            tmp.write_bytes(resp.read())
+        subprocess.run([str(py_exe), str(tmp)], check=True)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def _ensure_build_venv() -> None:
     """Create .venv-build and install deps if it doesn't exist yet."""
     if _BUILD_PYTHON.exists():
-        return
+        chk = subprocess.run(
+            [str(_BUILD_PYTHON), "-m", "pip", "--version"],
+            capture_output=True,
+        )
+        if chk.returncode == 0:
+            return
+        print("Existing .venv-build is incomplete; recreating …")
+        shutil.rmtree(_BUILD_VENV, ignore_errors=True)
+    elif _BUILD_VENV.exists():
+        shutil.rmtree(_BUILD_VENV, ignore_errors=True)
+
     print("Creating clean build venv (.venv-build)…")
-    subprocess.run([sys.executable, "-m", "venv", str(_BUILD_VENV)], check=True)
+    venv_cmd = [sys.executable, "-m", "venv", str(_BUILD_VENV)]
+    if sys.platform == "win32":
+        venv_cmd.append("--copies")
+
+    try:
+        subprocess.run(venv_cmd, check=True)
+    except subprocess.CalledProcessError:
+        print("Standard venv failed (often OneDrive / ensurepip). Retrying with --without-pip …")
+        shutil.rmtree(_BUILD_VENV, ignore_errors=True)
+        subprocess.run(venv_cmd + ["--without-pip"], check=True)
+        _bootstrap_pip_into_venv(_BUILD_PYTHON)
+
     subprocess.run(
         [str(_BUILD_PYTHON), "-m", "pip", "install", "-r", str(_ROOT / "requirements.txt"), "pyinstaller", "-q"],
         check=True,
@@ -134,7 +172,6 @@ def main() -> None:
     _ensure_build_venv()
     _write_spec()
 
-    import shutil
     import tempfile
 
     build_base = Path(tempfile.gettempdir()) / "StockAssistant_build"
