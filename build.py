@@ -93,7 +93,7 @@ def _write_spec() -> None:
             hiddenimports={hidden_str} + all_hiddenimports,
             hookspath=[],
             hooksconfig={{}},
-            runtime_hooks=[],
+            runtime_hooks=['{_q(_ROOT / "scripts" / "pyi_rth_stockassistant_bootlog.py")}'],
             excludes=[],
             win_no_prefer_redirects=False,
             win_private_assemblies=False,

@@ -15,6 +15,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -38,24 +39,83 @@ _URL = f"http://{_HOST}:{_PORT}"
 _STARTUP_TIMEOUT = 60
 
 # ---------------------------------------------------------------------------
-# Diagnostic log (file-based, written next to the .exe in frozen builds)
+# Diagnostic log (frozen: next to .exe, with fallback under %LOCALAPPDATA%)
 # ---------------------------------------------------------------------------
 _log = logging.getLogger("launcher")
-
-
-def _setup_logging() -> None:
-    _log.setLevel(logging.DEBUG)
-    if _is_frozen():
-        log_path = Path(sys.executable).with_name("StockAssistant.log")
-        handler: logging.Handler = logging.FileHandler(str(log_path), encoding="utf-8")
-    else:
-        handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-    _log.addHandler(handler)
+_ACTIVE_LOG_PATH: str | None = None
 
 
 def _is_frozen() -> bool:
     return getattr(sys, "frozen", False)
+
+
+def _win_local_appdata_dir() -> Path:
+    la = os.environ.get("LOCALAPPDATA")
+    if not la:
+        la = str(Path.home() / "AppData" / "Local")
+    d = Path(la) / "StockAssistant"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _frozen_fallback_log() -> Path:
+    if sys.platform == "win32":
+        return _win_local_appdata_dir() / "StockAssistant.log"
+    base = Path.home() / ".cache" / "StockAssistant"
+    base.mkdir(parents=True, exist_ok=True)
+    return base / "StockAssistant.log"
+
+
+def _frozen_primary_log() -> Path:
+    return Path(sys.executable).resolve().with_name("StockAssistant.log")
+
+
+def _boot_temp_stamp_path() -> Path:
+    return Path(tempfile.gettempdir()) / "StockAssistant_last_boot.log"
+
+
+def _boot_frozen_traces() -> None:
+    """Append a boot line as soon as the frozen process starts (before main)."""
+    if not _is_frozen():
+        return
+    stamp = (
+        f"{time.strftime('%Y-%m-%d %H:%M:%S')} launcher_boot pid={os.getpid()} "
+        f"exe={sys.executable}\n"
+    )
+    paths = (_frozen_primary_log(), _frozen_fallback_log(), _boot_temp_stamp_path())
+    for path in paths:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(stamp)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError:
+                    pass
+        except OSError:
+            continue
+
+
+def _setup_logging() -> None:
+    global _ACTIVE_LOG_PATH
+    if _log.handlers:
+        return
+    _log.setLevel(logging.DEBUG)
+    if _is_frozen():
+        log_path = _frozen_primary_log()
+        try:
+            handler: logging.Handler = logging.FileHandler(str(log_path), encoding="utf-8")
+            _ACTIVE_LOG_PATH = str(log_path)
+        except OSError:
+            log_path = _frozen_fallback_log()
+            handler = logging.FileHandler(str(log_path), encoding="utf-8")
+            _ACTIVE_LOG_PATH = str(log_path)
+    else:
+        handler = logging.StreamHandler(sys.stderr)
+        _ACTIVE_LOG_PATH = None
+    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    _log.addHandler(handler)
 
 
 def _port_open(host: str, port: int) -> bool:
@@ -89,6 +149,25 @@ def _check_for_updates() -> bool:
         return check_and_update()
     except Exception:
         return False
+
+
+def _ensure_dotnet_root_for_pythonnet() -> None:
+    """clr_loader/coreclr needs DOTNET_ROOT; frozen GUI apps may not inherit a full shell PATH."""
+    if sys.platform != "win32":
+        return
+    if os.environ.get("DOTNET_ROOT"):
+        return
+    pf = os.environ.get("ProgramFiles", r"C:\Program Files")
+    pfx86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+    for base in (
+        Path(pf) / "dotnet",
+        Path(pfx86) / "dotnet",
+        Path(r"C:\Program Files\dotnet"),
+        Path(r"C:\Program Files (x86)\dotnet"),
+    ):
+        if (base / "dotnet.exe").exists():
+            os.environ["DOTNET_ROOT"] = str(base.resolve())
+            return
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +208,9 @@ def _open_browser_and_block(reason: str = "") -> None:
         if reason:
             msg += f"Cause: {reason}\n\n"
         msg += (
-            "A log file (StockAssistant.log) has been written next to the .exe.\n\n"
+            "Logs: StockAssistant.log next to the .exe, "
+            "%LOCALAPPDATA%\\StockAssistant\\StockAssistant.log, or "
+            "%TEMP%\\StockAssistant_last_boot.log.\n\n"
             "When you are finished, close this dialog to exit."
         )
         ctypes.windll.user32.MessageBoxW(0, msg, "Stock Assistant", 0x40)
@@ -144,47 +225,42 @@ def _open_browser_and_block(reason: str = "") -> None:
         time.sleep(1)
 
 
-_streamlit_error: str | None = None
-
-
-def _start_streamlit_inprocess() -> threading.Thread:
-    """Run the Streamlit server in a daemon thread (used in frozen .exe builds).
-
-    In a PyInstaller bundle sys.executable is the .exe itself, so spawning
-    ``sys.executable -m streamlit`` would re-launch the whole app in a loop.
-    Instead we call Streamlit's bootstrap.run() directly in-process.
-    """
+def _apply_streamlit_env() -> None:
     os.environ["STREAMLIT_SERVER_HEADLESS"] = "true"
     os.environ["STREAMLIT_SERVER_PORT"] = str(_PORT)
     os.environ["STREAMLIT_SERVER_ADDRESS"] = _HOST
     os.environ["STREAMLIT_GLOBAL_DEVELOPMENT_MODE"] = "false"
 
-    flag_options = {
+
+def _streamlit_flag_options() -> dict:
+    return {
         "server.headless": True,
         "server.port": _PORT,
         "server.address": _HOST,
         "global.developmentMode": False,
     }
 
-    _log.info("Importing streamlit.web.bootstrap …")
-    try:
-        from streamlit.web.bootstrap import run as st_run
-    except Exception:
-        _log.error("Failed to import Streamlit:\n%s", traceback.format_exc())
-        raise
 
-    def _run_streamlit() -> None:
-        global _streamlit_error
-        try:
-            st_run(str(_STREAMLIT_SCRIPT), False, [], flag_options)
-        except Exception:
-            _streamlit_error = traceback.format_exc()
-            _log.error("Streamlit crashed:\n%s", _streamlit_error)
+def _streamlit_worker_entry() -> None:
+    """Second process: Streamlit bootstrap on the real main thread (signal handlers work)."""
+    _apply_streamlit_env()
+    _log.info("streamlit-worker: importing bootstrap …")
+    from streamlit.web.bootstrap import run as st_run
 
-    _log.info("Starting Streamlit thread …")
-    thread = threading.Thread(target=_run_streamlit, daemon=True)
-    thread.start()
-    return thread
+    st_run(str(_STREAMLIT_SCRIPT), False, [], _streamlit_flag_options())
+
+
+def _start_streamlit_frozen_worker() -> subprocess.Popen:
+    """Re-launch same .exe with --streamlit-worker (Streamlit cannot run in a daemon thread)."""
+    _apply_streamlit_env()
+    _log.info("Starting Streamlit worker subprocess …")
+    return subprocess.Popen(
+        [sys.executable, "--streamlit-worker"],
+        cwd=str(Path(sys.executable).resolve().parent),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -201,16 +277,25 @@ def main() -> None:
             sys.exit(0)
 
     if _is_frozen():
-        os.environ.setdefault("PYTHONNET_RUNTIME", "coreclr")
-        _log.info("PYTHONNET_RUNTIME=%s", os.environ.get("PYTHONNET_RUNTIME"))
+        _ensure_dotnet_root_for_pythonnet()
+        if os.environ.get("DOTNET_ROOT"):
+            os.environ.setdefault("PYTHONNET_RUNTIME", "coreclr")
+        else:
+            os.environ.pop("PYTHONNET_RUNTIME", None)
+        _log.info(
+            "DOTNET_ROOT=%r PYTHONNET_RUNTIME=%r",
+            os.environ.get("DOTNET_ROOT"),
+            os.environ.get("PYTHONNET_RUNTIME"),
+        )
 
     proc = None
     if _is_frozen():
         try:
-            _start_streamlit_inprocess()
+            proc = _start_streamlit_frozen_worker()
+            atexit.register(_kill_proc, proc)
         except Exception:
-            _log.error("Streamlit failed to start:\n%s", traceback.format_exc())
-            _open_browser_and_block(reason=f"Streamlit import failed — see StockAssistant.log")
+            _log.error("Streamlit worker failed to start:\n%s", traceback.format_exc())
+            _open_browser_and_block(reason="Streamlit worker failed — see StockAssistant.log")
             return
     else:
         proc = _start_streamlit_subprocess()
@@ -219,7 +304,9 @@ def main() -> None:
     signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
 
     if not _wait_for_server(_HOST, _PORT, _STARTUP_TIMEOUT):
-        reason = _streamlit_error or "Streamlit did not respond within 60 s"
+        reason = "Streamlit did not respond within 60 s"
+        if proc is not None and proc.poll() is not None:
+            reason = f"Streamlit process exited early (code {proc.returncode})"
         _log.error("Server wait failed: %s", reason)
         if proc:
             _kill_proc(proc)
@@ -256,5 +343,45 @@ def main() -> None:
         _kill_proc(proc)
 
 
+def _write_crash_report(text: str) -> None:
+    paths = []
+    if getattr(sys, "frozen", False):
+        paths.append(Path(sys.executable).resolve().with_name("StockAssistant_crash.txt"))
+        paths.append(_frozen_fallback_log().with_name("StockAssistant_crash.txt"))
+        paths.append(Path(tempfile.gettempdir()) / "StockAssistant_last_crash.txt")
+    for p in paths:
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(text, encoding="utf-8")
+            return
+        except OSError:
+            continue
+
+
 if __name__ == "__main__":
-    main()
+    _boot_frozen_traces()
+    if _is_frozen() and len(sys.argv) > 1 and sys.argv[1] == "--streamlit-worker":
+        _setup_logging()
+        try:
+            _streamlit_worker_entry()
+        finally:
+            logging.shutdown()
+        sys.exit(0)
+    try:
+        main()
+    except Exception:
+        crash = traceback.format_exc()
+        _write_crash_report(crash)
+        if getattr(sys, "frozen", False) and sys.platform == "win32":
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(
+                0,
+                f"StockAssistant crashed:\n\n{crash[:800]}\n\n"
+                "Details: StockAssistant_crash.txt next to the .exe, "
+                "%LOCALAPPDATA%\\StockAssistant\\, or %TEMP%\\StockAssistant_last_crash.txt.",
+                "Stock Assistant — Fatal Error",
+                0x10,
+            )
+        raise
+    finally:
+        logging.shutdown()
