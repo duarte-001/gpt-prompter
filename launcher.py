@@ -9,6 +9,7 @@ Usage:  python launcher.py
 from __future__ import annotations
 
 import atexit
+import json
 import logging
 import os
 import shutil
@@ -43,6 +44,26 @@ _STARTUP_TIMEOUT = 60
 # ---------------------------------------------------------------------------
 _log = logging.getLogger("launcher")
 _ACTIVE_LOG_PATH: str | None = None
+_DEBUG_LOG_PATH = Path(__file__).resolve().parent / "debug-5af0ea.log"
+
+
+def _debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: dict) -> None:
+    # region agent log
+    payload = {
+        "sessionId": "5af0ea",
+        "runId": run_id,
+        "hypothesisId": hypothesis_id,
+        "location": location,
+        "message": message,
+        "data": data,
+        "timestamp": int(time.time() * 1000),
+    }
+    try:
+        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=True) + "\n")
+    except OSError:
+        pass
+    # endregion
 
 
 def _is_frozen() -> bool:
@@ -131,12 +152,43 @@ def _server_ready(url: str) -> bool:
 
 def _wait_for_server(url: str, timeout: float, proc: subprocess.Popen | None = None) -> bool:
     deadline = time.monotonic() + timeout
+    checks = 0
     while time.monotonic() < deadline:
+        checks += 1
         if proc is not None and proc.poll() is not None:
+            _debug_log(
+                run_id="initial",
+                hypothesis_id="H1",
+                location="launcher.py:_wait_for_server",
+                message="worker exited before readiness",
+                data={"poll_returncode": proc.returncode, "checks": checks},
+            )
             return False
         if _server_ready(url):
+            _debug_log(
+                run_id="initial",
+                hypothesis_id="H2",
+                location="launcher.py:_wait_for_server",
+                message="health check returned HTTP 200",
+                data={"checks": checks, "url": url},
+            )
             return True
+        if checks in (1, 20, 60, 100):
+            _debug_log(
+                run_id="initial",
+                hypothesis_id="H4",
+                location="launcher.py:_wait_for_server",
+                message="server still not ready",
+                data={"checks": checks, "elapsed_s": round(timeout - (deadline - time.monotonic()), 2)},
+            )
         time.sleep(0.5)
+    _debug_log(
+        run_id="initial",
+        hypothesis_id="H4",
+        location="launcher.py:_wait_for_server",
+        message="startup timeout reached",
+        data={"timeout_s": timeout, "checks": checks},
+    )
     return False
 
 
@@ -295,6 +347,13 @@ def _streamlit_flag_options() -> dict:
 def _streamlit_worker_entry() -> None:
     """Second process: Streamlit bootstrap on the real main thread (signal handlers work)."""
     _apply_streamlit_env()
+    _debug_log(
+        run_id="initial",
+        hypothesis_id="H1",
+        location="launcher.py:_streamlit_worker_entry",
+        message="worker entry reached",
+        data={"pid": os.getpid(), "script": str(_STREAMLIT_SCRIPT), "flags": _streamlit_flag_options()},
+    )
     _log.info("streamlit-worker: importing bootstrap …")
     from streamlit.web.bootstrap import run as st_run
 
@@ -319,6 +378,13 @@ def _start_streamlit_frozen_worker() -> subprocess.Popen:
         stderr=subprocess.STDOUT,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
+    _debug_log(
+        run_id="initial",
+        hypothesis_id="H5",
+        location="launcher.py:_start_streamlit_frozen_worker",
+        message="spawned frozen worker",
+        data={"pid": proc.pid, "argv": [sys.executable, "--streamlit-worker"], "wlog": str(wlog)},
+    )
     _log.info("Worker log: %s", wlog)
     return proc
 
@@ -329,6 +395,13 @@ def _start_streamlit_frozen_worker() -> subprocess.Popen:
 
 def main() -> None:
     _setup_logging()
+    _debug_log(
+        run_id="initial",
+        hypothesis_id="H3",
+        location="launcher.py:main",
+        message="launcher main entered",
+        data={"pid": os.getpid(), "argv": sys.argv, "is_frozen": _is_frozen(), "exe": sys.executable},
+    )
     _log.info("launcher start  frozen=%s  python=%s  root=%s", _is_frozen(), sys.version, _ROOT)
 
     if not _is_frozen() and "--skip-update" not in sys.argv:
@@ -418,8 +491,22 @@ def _write_crash_report(text: str) -> None:
 
 if __name__ == "__main__":
     _boot_frozen_traces()
+    _debug_log(
+        run_id="initial",
+        hypothesis_id="H5",
+        location="launcher.py:__main__",
+        message="module entrypoint",
+        data={"pid": os.getpid(), "argv": sys.argv, "is_frozen": _is_frozen(), "exe": sys.executable},
+    )
     if _is_frozen() and len(sys.argv) > 1 and sys.argv[1] == "--streamlit-worker":
         _setup_logging()
+        _debug_log(
+            run_id="initial",
+            hypothesis_id="H5",
+            location="launcher.py:__main__",
+            message="worker mode branch taken",
+            data={"pid": os.getpid(), "argv": sys.argv},
+        )
         try:
             _streamlit_worker_entry()
         finally:
