@@ -24,6 +24,19 @@ jobs:
       - name: Build .exe
         run: python build.py
 
+      - name: Write build metadata (verify downloaded zip matches this run)
+        shell: bash
+        run: |
+          OUT="dist/StockAssistant/BUILD_INFO.txt"
+          {
+            echo "github_sha=${GITHUB_SHA}"
+            echo "github_ref=${GITHUB_REF_NAME}"
+            echo "run_id=${GITHUB_RUN_ID}"
+            echo "run_url=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            date -u "+%Y-%m-%dT%H:%M:%SZ" | sed 's/^/built_at=/'
+          } > "$OUT"
+          cat "$OUT"
+
       - name: Read version
         id: version
         shell: bash
