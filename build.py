@@ -69,18 +69,25 @@ def _write_spec() -> None:
         import sys
         sys.setrecursionlimit(sys.getrecursionlimit() * 5)
 
-        from PyInstaller.utils.hooks import collect_all
+        from PyInstaller.utils.hooks import collect_all, collect_data_files
 
         st_datas, st_binaries, st_hiddenimports = collect_all('streamlit')
+        wv_datas, wv_binaries, wv_hiddenimports = collect_all('webview')
+        pn_datas, pn_binaries, pn_hiddenimports = collect_all('pythonnet')
+        cl_datas, cl_binaries, cl_hiddenimports = collect_all('clr_loader')
+
+        all_datas = st_datas + wv_datas + pn_datas + cl_datas
+        all_binaries = st_binaries + wv_binaries + pn_binaries + cl_binaries
+        all_hiddenimports = st_hiddenimports + wv_hiddenimports + pn_hiddenimports + cl_hiddenimports
 
         block_cipher = None
 
         a = Analysis(
             ['{_q(_ROOT / "launcher.py")}'],
             pathex=['{_q(_ROOT)}'],
-            binaries=st_binaries,
-            datas={datas_str} + st_datas,
-            hiddenimports={hidden_str} + st_hiddenimports,
+            binaries=all_binaries,
+            datas={datas_str} + all_datas,
+            hiddenimports={hidden_str} + all_hiddenimports,
             hookspath=[],
             hooksconfig={{}},
             runtime_hooks=[],
@@ -127,12 +134,30 @@ def main() -> None:
     _ensure_build_venv()
     _write_spec()
 
-    cmd = [str(_BUILD_PYTHON), "-m", "PyInstaller", "--noconfirm", str(_SPEC)]
+    import shutil
+    import tempfile
+
+    build_base = Path(tempfile.gettempdir()) / "StockAssistant_build"
+    work_dir = build_base / "build"
+    dist_dir = build_base / "dist"
+
+    cmd = [
+        str(_BUILD_PYTHON), "-m", "PyInstaller",
+        "--noconfirm", "--clean",
+        "--workpath", str(work_dir),
+        "--distpath", str(dist_dir),
+        str(_SPEC),
+    ]
     print("Running:", " ".join(cmd))
     result = subprocess.run(cmd, cwd=str(_ROOT))
 
     if result.returncode == 0:
-        exe = _ROOT / "dist" / "StockAssistant" / "StockAssistant.exe"
+        final_dist = _ROOT / "dist" / "StockAssistant"
+        if final_dist.exists():
+            shutil.rmtree(final_dist, ignore_errors=True)
+        (_ROOT / "dist").mkdir(exist_ok=True)
+        shutil.copytree(dist_dir / "StockAssistant", final_dist)
+        exe = final_dist / "StockAssistant.exe"
         print(f"\nBuild succeeded.\nExecutable: {exe}")
     else:
         print(f"\nBuild failed (exit code {result.returncode}).", file=sys.stderr)

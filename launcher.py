@@ -163,7 +163,7 @@ def main() -> None:
         height=820,
         min_size=(800, 500),
     )
-    webview.start(icon=icon_path, gui="edgechromium")
+    webview.start(icon=icon_path)
 
     if proc:
         _kill_proc(proc)
