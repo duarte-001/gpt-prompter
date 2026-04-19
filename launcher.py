@@ -14,17 +14,30 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
-_ROOT = Path(__file__).resolve().parent
+
+def _get_root() -> Path:
+    """Project root: works both from source checkout and PyInstaller bundle."""
+    if getattr(sys, "frozen", False):
+        return Path(sys._MEIPASS)
+    return Path(__file__).resolve().parent
+
+
+_ROOT = _get_root()
 _ICON = _ROOT / "assets" / "icon.ico"
 _STREAMLIT_SCRIPT = _ROOT / "src" / "streamlit_app.py"
 
 _HOST = "127.0.0.1"
 _PORT = 8501
 _URL = f"http://{_HOST}:{_PORT}"
-_STARTUP_TIMEOUT = 30  # seconds
+_STARTUP_TIMEOUT = 60
+
+
+def _is_frozen() -> bool:
+    return getattr(sys, "frozen", False)
 
 
 def _port_open(host: str, port: int) -> bool:
@@ -51,23 +64,21 @@ def _kill_proc(proc: subprocess.Popen) -> None:
             proc.kill()
 
 
-def _check_for_updates() -> None:
-    """Run the updater; if it pulled new code, re-launch this script and exit."""
+def _check_for_updates() -> bool:
+    """Run the updater. Returns True if code was updated (caller should restart)."""
     try:
         from src.updater import check_and_update
-
-        if check_and_update():
-            os.execv(sys.executable, [sys.executable, str(_ROOT / "launcher.py"), "--skip-update"])
+        return check_and_update()
     except Exception:
-        pass
+        return False
 
 
-def main() -> None:
-    if "--skip-update" not in sys.argv:
-        _check_for_updates()
+# ---------------------------------------------------------------------------
+# Streamlit launch strategies
+# ---------------------------------------------------------------------------
 
-    import webview  # imported after potential update so new code is picked up
-
+def _start_streamlit_subprocess() -> subprocess.Popen:
+    """Launch Streamlit as a child process (used when running from source)."""
     streamlit_cmd = [
         sys.executable, "-m", "streamlit", "run",
         str(_STREAMLIT_SCRIPT),
@@ -77,18 +88,70 @@ def main() -> None:
         "--global.developmentMode=false",
     ]
 
-    proc = subprocess.Popen(
+    return subprocess.Popen(
         streamlit_cmd,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        cwd=str(_ROOT),
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
-    atexit.register(_kill_proc, proc)
+
+
+def _start_streamlit_inprocess() -> threading.Thread:
+    """Run the Streamlit server in a daemon thread (used in frozen .exe builds).
+
+    In a PyInstaller bundle sys.executable is the .exe itself, so spawning
+    ``sys.executable -m streamlit`` would re-launch the whole app in a loop.
+    Instead we call Streamlit's bootstrap.run() directly in-process.
+    """
+    os.environ["STREAMLIT_SERVER_HEADLESS"] = "true"
+    os.environ["STREAMLIT_SERVER_PORT"] = str(_PORT)
+    os.environ["STREAMLIT_SERVER_ADDRESS"] = _HOST
+    os.environ["STREAMLIT_GLOBAL_DEVELOPMENT_MODE"] = "false"
+
+    flag_options = {
+        "server.headless": True,
+        "server.port": _PORT,
+        "server.address": _HOST,
+        "global.developmentMode": False,
+    }
+
+    from streamlit.web.bootstrap import run as st_run
+
+    thread = threading.Thread(
+        target=st_run,
+        args=(str(_STREAMLIT_SCRIPT), False, [], flag_options),
+        daemon=True,
+    )
+    thread.start()
+    return thread
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    if not _is_frozen() and "--skip-update" not in sys.argv:
+        if _check_for_updates():
+            subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--skip-update"])
+            sys.exit(0)
+
+    import webview
+
+    proc = None
+    if _is_frozen():
+        _start_streamlit_inprocess()
+    else:
+        proc = _start_streamlit_subprocess()
+        atexit.register(_kill_proc, proc)
+
     signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
 
     if not _wait_for_server(_HOST, _PORT, _STARTUP_TIMEOUT):
         print("ERROR: Streamlit did not start within the timeout.", file=sys.stderr)
-        _kill_proc(proc)
+        if proc:
+            _kill_proc(proc)
         sys.exit(1)
 
     icon_path = str(_ICON) if _ICON.exists() else None
@@ -102,7 +165,8 @@ def main() -> None:
     )
     webview.start(icon=icon_path, gui="edgechromium")
 
-    _kill_proc(proc)
+    if proc:
+        _kill_proc(proc)
 
 
 if __name__ == "__main__":

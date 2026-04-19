@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
-# Project root (parent of src/)
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# Project root (parent of src/); inside a PyInstaller bundle use _MEIPASS.
+if getattr(sys, "frozen", False):
+    PROJECT_ROOT = Path(sys._MEIPASS)
+else:
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # Local data (exports, future RAG/Chroma); created on demand
 DATA_DIR = PROJECT_ROOT / "data"
