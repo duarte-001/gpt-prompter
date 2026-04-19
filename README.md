@@ -68,8 +68,60 @@ This app is intentionally multi-step. Each step reduces ambiguity before the fin
   - RAG adds qualitative background,
   - GPT handles final reasoning and writing style.
 
+## Auto-Updates
+
+When launched via `python launcher.py`, the app checks GitHub (`origin/main`) for new commits before starting. If updates are found, a dialog asks whether to update now. Accepting triggers `git pull --ff-only` and `pip install -r requirements.txt`, then the app restarts with the new code.
+
+To skip the check (e.g. offline), pass `--skip-update`:
+
+```powershell
+python launcher.py --skip-update
+```
+
+## Download (no Python required)
+
+Pre-built Windows releases are available on GitHub:
+
+1. Go to [**Releases**](https://github.com/duarte-001/gpt-prompter/releases).
+2. Download the latest `StockAssistant-*-windows.zip`.
+3. Extract the zip to any folder.
+4. Double-click `StockAssistant.exe` to launch.
+
+No Python, no terminal, no setup commands needed.
+
+## Releasing a New Version (maintainer)
+
+When you want to publish a new `.exe` build:
+
+```powershell
+# 1. Bump the version in the VERSION file
+# 2. Commit and tag
+git add -A && git commit -m "release v1.0.0"
+git tag v1.0.0
+git push origin main --tags
+```
+
+GitHub Actions builds the `.exe` automatically and publishes it as a release.
+
+## Building Locally (optional)
+
+You can also build the `.exe` on your own machine:
+
+```powershell
+pip install pyinstaller
+python build.py
+```
+
+The output is `dist/StockAssistant/StockAssistant.exe`.
+
+**Note:** the `.exe` is a frozen snapshot. Auto-updates only work when running from the git checkout (`python launcher.py`), not from the `.exe`.
+
 ## Architecture (High Level)
 
+- `launcher.py`
+  - Desktop entry point: checks for updates, starts Streamlit as a subprocess, and opens a native pywebview window.
+- `src/updater.py`
+  - Auto-update logic: fetches from origin, compares commits, prompts user, pulls and installs deps.
 - `src/streamlit_app.py`
   - Main UI.
   - Runs warm-up fetch + optional indexing once per session.
@@ -128,6 +180,19 @@ ollama pull nomic-embed-text
 ```
 
 ## Run the App
+
+### Desktop app (recommended)
+
+Launches the Streamlit backend and opens it in a native window with a taskbar icon (no browser needed). Install deps first (includes **pywebview** — the PyPI name is `pywebview`, not `webview`):
+
+```powershell
+pip install -r requirements.txt
+python launcher.py
+```
+
+### Browser mode
+
+If you prefer the classic browser experience:
 
 ```powershell
 streamlit run src/streamlit_app.py
@@ -198,6 +263,8 @@ python src/app.py ask "Is NVDA trending up?"
   - Ask with ticker/company/sector words, or rely on context from prior turns.
 - **Copy button blocked**
   - Browser clipboard permission may be restricted; use the prompt preview box manually.
+- **Desktop: `ModuleNotFoundError: No module named 'webview'` or MSVC error when installing**
+  - Install **`pywebview`**, not the unrelated `webview` package: `pip install pywebview` or `pip install -r requirements.txt`. The import name is `webview`, but the correct install name on PyPI is `pywebview`.
 
 ## Notes
 
