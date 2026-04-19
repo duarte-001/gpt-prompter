@@ -1,6 +1,6 @@
 """
 Desktop launcher: checks for updates, then runs the Streamlit app inside
-a native OS window via pywebview.
+a native-feeling window (Edge/Chrome --app mode) or the default browser.
 
 Usage:  python launcher.py
         python launcher.py --skip-update
@@ -152,104 +152,66 @@ def _check_for_updates() -> bool:
         return False
 
 
-def _refresh_windows_path_from_registry() -> None:
-    """Re-merge machine + user PATH so `shutil.which("dotnet")` matches Explorer/shell behavior."""
-    if sys.platform != "win32":
-        return
-    import winreg
+# ---------------------------------------------------------------------------
+# Native-feeling window via Edge / Chrome --app mode
+# ---------------------------------------------------------------------------
 
-    chunks: list[str] = []
-    for hive, subkey in (
-        (winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
-        (winreg.HKEY_CURRENT_USER, r"Environment"),
-    ):
-        try:
-            with winreg.OpenKey(hive, subkey) as key:
-                path_val, _ = winreg.QueryValueEx(key, "PATH")
-        except OSError:
+def _find_edge_or_chrome() -> str | None:
+    """Return the path to msedge.exe or chrome.exe, or None."""
+    if sys.platform != "win32":
+        return shutil.which("google-chrome") or shutil.which("chromium-browser")
+
+    candidates: list[Path] = []
+    for env_var in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
+        base = os.environ.get(env_var)
+        if not base:
             continue
-        if path_val and isinstance(path_val, str):
-            chunks.append(path_val)
-    if chunks:
-        os.environ["PATH"] = ";".join(chunks) + ";" + os.environ.get("PATH", "")
+        candidates.append(Path(base) / "Microsoft" / "Edge" / "Application" / "msedge.exe")
+        candidates.append(Path(base) / "Google" / "Chrome" / "Application" / "chrome.exe")
+
+    for p in candidates:
+        if p.exists():
+            return str(p)
+
+    return shutil.which("msedge") or shutil.which("chrome") or shutil.which("google-chrome")
 
 
-def _dotnet_install_locations_from_registry() -> list[Path]:
-    """Return candidate dotnet roots from the .NET installer registry (works when PATH has no dotnet)."""
-    if sys.platform != "win32":
-        return []
-    import winreg
-
-    out: list[Path] = []
-    pairs = [
-        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\dotnet\Setup\InstalledVersions\x64"),
-        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\dotnet\Setup\InstalledVersions\x64"),
-        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\dotnet\Setup\InstalledVersions\x86"),
-        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\dotnet\Setup\InstalledVersions\x86"),
-        (winreg.HKEY_CURRENT_USER, r"SOFTWARE\dotnet\Setup\InstalledVersions\x64"),
-        (winreg.HKEY_CURRENT_USER, r"SOFTWARE\dotnet\Setup\InstalledVersions\x86"),
-    ]
-    for hive, subkey in pairs:
-        try:
-            with winreg.OpenKey(hive, subkey) as key:
-                loc, _ = winreg.QueryValueEx(key, "InstallLocation")
-        except OSError:
-            continue
-        if isinstance(loc, str) and loc.strip():
-            out.append(Path(loc.strip().rstrip("\\/")))
-    return out
-
-
-def _discover_dotnet_install_root() -> Path | None:
-    """Find a directory containing dotnet.exe (CoreCLR host). None if nothing usable."""
-    if sys.platform != "win32":
+def _launch_app_mode_window(url: str) -> subprocess.Popen | None:
+    """Open *url* in a chromeless Edge/Chrome window (--app mode). Returns the process or None."""
+    browser = _find_edge_or_chrome()
+    if not browser:
+        _log.warning("No Edge or Chrome found for --app mode")
         return None
 
-    _refresh_windows_path_from_registry()
-
-    dotnet_exe = shutil.which("dotnet")
-    if dotnet_exe:
-        root = Path(dotnet_exe).resolve().parent
-        if (root / "dotnet.exe").exists():
-            return root
-
-    for reg_root in _dotnet_install_locations_from_registry():
-        if (reg_root / "dotnet.exe").exists():
-            return reg_root.resolve()
-
-    la = os.environ.get("LOCALAPPDATA")
-    if la:
-        user_root = Path(la) / "Microsoft" / "dotnet"
-        if (user_root / "dotnet.exe").exists():
-            return user_root.resolve()
-
-    pf = os.environ.get("ProgramFiles", r"C:\Program Files")
-    pfx86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
-    for base in (
-        Path(pf) / "dotnet",
-        Path(pfx86) / "dotnet",
-        Path(r"C:\Program Files\dotnet"),
-        Path(r"C:\Program Files (x86)\dotnet"),
-    ):
-        if (base / "dotnet.exe").exists():
-            return base.resolve()
-    return None
-
-
-def _prime_pythonnet_coreclr(dotnet_root: Path) -> bool:
-    """Select CoreCLR before `import clr` so pythonnet never sticks on a broken netfx runtime."""
-    root_s = str(dotnet_root.resolve())
-    os.environ["DOTNET_ROOT"] = root_s
-    os.environ["PYTHONNET_RUNTIME"] = "coreclr"
+    user_data = _win_local_appdata_dir() / "browser-profile" if sys.platform == "win32" else None
+    cmd = [
+        browser,
+        f"--app={url}",
+        "--no-first-run",
+        "--disable-extensions",
+        f"--window-size=1200,820",
+    ]
+    if user_data:
+        cmd.append(f"--user-data-dir={user_data}")
+    _log.info("Launching app-mode window: %s", " ".join(cmd))
     try:
-        from clr_loader import get_coreclr
-        from pythonnet import set_runtime
+        return subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except OSError as exc:
+        _log.warning("Failed to launch app-mode window: %s", exc)
+        return None
 
-        set_runtime(get_coreclr(dotnet_root=root_s))
-    except Exception:
-        _log.warning("pythonnet CoreCLR pre-init failed:\n%s", traceback.format_exc())
-        return False
-    return True
+
+def _open_browser_fallback(reason: str = "") -> None:
+    """Open in the default browser (no blocking dialog)."""
+    import webbrowser
+
+    _log.info("Opening in default browser. Reason: %s", reason)
+    webbrowser.open(_URL)
 
 
 # ---------------------------------------------------------------------------
@@ -274,37 +236,6 @@ def _start_streamlit_subprocess() -> subprocess.Popen:
         cwd=str(_ROOT),
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
-
-
-def _open_browser_and_block(reason: str = "") -> None:
-    """Last resort: open in default browser and keep Streamlit alive."""
-    import ctypes
-    import webbrowser
-
-    _log.info("Falling back to default browser. Reason: %s", reason)
-    webbrowser.open(_URL)
-    if _is_frozen() and sys.platform == "win32":
-        msg = (
-            "The native window could not be started, so the app was opened in your default browser.\n\n"
-        )
-        if reason:
-            msg += f"Cause: {reason}\n\n"
-        msg += (
-            "Logs: StockAssistant.log next to the .exe, "
-            "%LOCALAPPDATA%\\StockAssistant\\StockAssistant.log, or "
-            "%TEMP%\\StockAssistant_last_boot.log.\n\n"
-            "When you are finished, close this dialog to exit."
-        )
-        ctypes.windll.user32.MessageBoxW(0, msg, "Stock Assistant", 0x40)
-        return
-    stop = threading.Event()
-
-    def _on_sigint(*_: object) -> None:
-        stop.set()
-
-    signal.signal(signal.SIGINT, _on_sigint)
-    while not stop.is_set():
-        time.sleep(1)
 
 
 def _apply_streamlit_env() -> None:
@@ -358,19 +289,6 @@ def main() -> None:
             subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--skip-update"])
             sys.exit(0)
 
-    if _is_frozen() and sys.platform == "win32":
-        dotnet_root = _discover_dotnet_install_root()
-        if dotnet_root:
-            _prime_pythonnet_coreclr(dotnet_root)
-        else:
-            os.environ.pop("DOTNET_ROOT", None)
-            os.environ.pop("PYTHONNET_RUNTIME", None)
-        _log.info(
-            "DOTNET_ROOT=%r PYTHONNET_RUNTIME=%r",
-            os.environ.get("DOTNET_ROOT"),
-            os.environ.get("PYTHONNET_RUNTIME"),
-        )
-
     proc = None
     if _is_frozen():
         try:
@@ -378,7 +296,7 @@ def main() -> None:
             atexit.register(_kill_proc, proc)
         except Exception:
             _log.error("Streamlit worker failed to start:\n%s", traceback.format_exc())
-            _open_browser_and_block(reason="Streamlit worker failed — see StockAssistant.log")
+            _open_browser_fallback(reason="Streamlit worker failed")
             return
     else:
         proc = _start_streamlit_subprocess()
@@ -394,33 +312,34 @@ def main() -> None:
         if proc:
             _kill_proc(proc)
         if _is_frozen():
-            _open_browser_and_block(reason=reason)
+            _open_browser_fallback(reason=reason)
             return
         print(f"ERROR: {reason}", file=sys.stderr)
         sys.exit(1)
 
     _log.info("Streamlit is listening — launching native window")
-    icon_path = str(_ICON) if _ICON.exists() else None
 
-    try:
-        import webview
-        _log.info("pywebview imported successfully")
-
-        webview.create_window(
-            "Stock Assistant",
-            _URL,
-            width=1200,
-            height=820,
-            min_size=(800, 500),
-        )
-        webview.start(icon=icon_path)
-    except Exception:
-        wv_err = traceback.format_exc()
-        _log.error("pywebview failed:\n%s", wv_err)
-        if _is_frozen():
-            _open_browser_and_block(reason="Native window failed — see StockAssistant.log")
+    browser_proc = _launch_app_mode_window(_URL)
+    if browser_proc:
+        _log.info("App-mode window launched (pid %d), waiting for it to close …", browser_proc.pid)
+        browser_proc.wait()
+        _log.info("App-mode window closed")
+    else:
+        _open_browser_fallback(reason="Edge/Chrome not found for app-mode window")
+        if _is_frozen() and sys.platform == "win32":
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(
+                0,
+                "Stock Assistant is running in your browser.\n\n"
+                "When you are finished, close this dialog to exit.",
+                "Stock Assistant",
+                0x40,
+            )
         else:
-            raise
+            stop = threading.Event()
+            signal.signal(signal.SIGINT, lambda *_: stop.set())
+            while not stop.is_set():
+                time.sleep(1)
 
     if proc:
         _kill_proc(proc)

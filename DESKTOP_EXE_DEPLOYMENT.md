@@ -1,14 +1,14 @@
 # Desktop `.exe` deployment — problem summary
 
-## What went wrong
+## What went wrong (and how it was fixed)
 
-### 1. Native window (pywebview) failed in the frozen app
+### 1. Native window (pywebview) failed in the frozen app — **REMOVED**
 
-- **Symptom:** Tracebacks around `pythonnet` / `clr` / `Python.Runtime.Loader.Initialize`, or `clr_loader` / `netfx.py`, when opening the UI from **PyInstaller** builds.
-- **Cause:** pywebview on Windows uses **.NET** via **pythonnet**. In a frozen process, the default **.NET Framework** path (`netfx`) often misbehaves (including `Failed to resolve Python.Runtime.Loader.Initialize` from `Python.Runtime.dll`). Forcing **CoreCLR** avoids that, but **`DOTNET_ROOT`** must point at a real host. Many PCs only have the **user** install `%LOCALAPPDATA%\Microsoft\dotnet` or **`dotnet` on PATH**, not `C:\Program Files\dotnet`, so the launcher used to leave `DOTNET_ROOT` unset and stuck on `netfx`. **UPX**-compressed `Python.Runtime.dll` can also break CLR load; the build excludes that DLL from UPX.
-- **Mitigation:** Before **any** `import clr` / `import webview`, resolve a dotnet host (`PATH` merged from registry so it matches a login shell, `InstallLocation` under `HKLM`/`HKCU` `SOFTWARE\dotnet\Setup\InstalledVersions\…`, `%LOCALAPPDATA%\Microsoft\dotnet`, then Program Files), set `DOTNET_ROOT` + `PYTHONNET_RUNTIME=coreclr`, and call **`pythonnet.set_runtime(clr_loader.get_coreclr(dotnet_root=…))`**. That avoids a pywebview footgun: it retries `import clr` with `PYTHONNET_RUNTIME=coreclr` after netfx fails, but **pythonnet already pinned `_RUNTIME` to netfx**, so the second import still hits `netfx.py` and the same error. If there is still no host, install the **[.NET desktop/runtime](https://dotnet.microsoft.com/download)** (or rely on browser fallback).
+- **Symptom:** Tracebacks around `pythonnet` / `clr` / `Python.Runtime.Loader.Initialize` when opening the UI from **PyInstaller** builds.
+- **Root cause:** pywebview on Windows uses **.NET** via **pythonnet** for *all* its backends (`winforms` and `edgechromium` both `import clr`). In a frozen process the default **.NET Framework** loader (`netfx`) consistently fails to resolve `Python.Runtime.dll`, and machines without a .NET Core/5+/6+ SDK can't use `coreclr` either. There is no pywebview backend on Windows that avoids pythonnet.
+- **Resolution:** **pywebview, pythonnet, and clr_loader were removed entirely.** The launcher now opens Edge or Chrome in `--app` mode (a chromeless window with no address bar or tabs) — zero .NET dependency, looks native, works on every Windows 10/11 machine that has Edge (all of them) or Chrome.
 
-### 2. “Browser fallback” still looked broken
+### 2. "Browser fallback" still looked broken
 
 - **Symptom:** Users said both native and browser paths failed.
 - **Cause:** The browser path only ran **after** Streamlit was listening. If Streamlit never started (or crashed first), the app exited **before** any fallback.
@@ -16,33 +16,45 @@
 
 ### 3. Streamlit inside the same `.exe` on a background thread
 
-- **Symptom:** `ValueError: signal only works in main thread of the main interpreter` from Streamlit’s bootstrap.
+- **Symptom:** `ValueError: signal only works in main thread of the main interpreter` from Streamlit's bootstrap.
 - **Cause:** Streamlit registers **SIGTERM** (and similar) from `bootstrap.run()`. That must run on the process **main thread**, not a **daemon** thread.
-- **Mitigation:** The frozen build relaunches the same `StockAssistant.exe` with **`--streamlit-worker`** so Streamlit runs in a **child process** on its own main thread; the parent hosts pywebview only.
+- **Mitigation:** The frozen build relaunches the same `StockAssistant.exe` with **`--streamlit-worker`** so Streamlit runs in a **child process** on its own main thread; the parent opens the browser window only.
 
-### 4. “No log file” after building
+### 4. "No log file" after building
 
-- **Symptom:** `StockAssistant.log` missing even though the user “ran” the app.
+- **Symptom:** `StockAssistant.log` missing even though the user "ran" the app.
 - **Causes:**
   - **Build ≠ run:** Logs are written when **`StockAssistant.exe` runs**, not when `python build.py` runs.
   - Writes **next to the `.exe`** can fail (OneDrive, permissions); logs were duplicated under **`%LOCALAPPDATA%\StockAssistant\`** and **`%TEMP%\StockAssistant_last_boot.log`**.
   - Crashes **before** `main()` could hide logs — addressed with top-level crash handling and a **PyInstaller runtime hook** that writes a boot line **before** `launcher.py` runs.
 
-### 5. “Works locally, fails when downloaded from GitHub”
+### 5. "Works locally, fails when downloaded from GitHub"
 
 - **Symptom:** Local `dist\StockAssistant\` works; the zip from Releases does not.
 - **Typical causes:**
   - The **release zip was built from an older commit** (tag still pointed at old code while local tree had fixes).
   - Reusing **`VERSION` = 1.0.0** and tag **`v1.0.0`** produces the **same zip name** every time → easy to download an **old** artifact by mistake.
-  - **Different machine** than the dev box (missing .NET / WebView2, antivirus, “run inside zip” without extracting).
+  - **Different machine** than the dev box (antivirus, "run inside zip" without extracting).
 - **Mitigation:** Push commits, **bump `VERSION`**, push a **new tag** (`v1.0.1`, …), confirm the **GitHub Actions** run succeeded. CI now drops **`BUILD_INFO.txt`** next to the exe (`github_sha`, run URL, `built_at`) so you can prove which build a zip came from.
+
+---
+
+## How the UI window works now
+
+1. `launcher.py` starts Streamlit in a child process (`--streamlit-worker`).
+2. Once Streamlit is listening, it looks for **`msedge.exe`** or **`chrome.exe`** in standard install paths.
+3. Launches the browser in **`--app=http://127.0.0.1:8501`** mode — a chromeless window.
+4. Waits for the browser window to close, then kills Streamlit and exits.
+5. If no Edge/Chrome is found, falls back to the **default browser** (`webbrowser.open`).
+
+No .NET, no pythonnet, no CLR, no pywebview.
 
 ---
 
 ## Quick verification checklist
 
 1. **Rebuild** (`python build.py` or CI).
-2. **Run** `StockAssistant.exe` (extracted folder, not “run from zip” only).
+2. **Run** `StockAssistant.exe` (extracted folder, not "run from zip" only).
 3. Check logs: exe directory, `%LOCALAPPDATA%\StockAssistant\`, `%TEMP%\StockAssistant_last_boot.log`.
 4. For a **GitHub** build: open **`BUILD_INFO.txt`** and match **`github_sha`** to the commit you intended to ship.
 
@@ -50,6 +62,6 @@
 
 ## References in this repo
 
-- Entry: `launcher.py` (webview parent, `--streamlit-worker` child, logging, fallbacks).
-- Bundle: `build.py` / generated `StockAssistant.spec` (PyInstaller, `collect_all` for heavy deps, optional `python build.py --debug` for a console).
+- Entry: `launcher.py` (Edge/Chrome `--app` mode parent, `--streamlit-worker` child, logging, fallbacks).
+- Bundle: `build.py` / generated `StockAssistant.spec` (PyInstaller, `collect_all` for Streamlit, optional `python build.py --debug` for a console).
 - CI: `.github/workflows/build.yml` (tag-triggered build, zip, `BUILD_INFO.txt`).

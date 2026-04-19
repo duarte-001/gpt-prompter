@@ -75,13 +75,10 @@ def _write_spec() -> None:
         from PyInstaller.utils.hooks import collect_all, collect_data_files
 
         st_datas, st_binaries, st_hiddenimports = collect_all('streamlit')
-        wv_datas, wv_binaries, wv_hiddenimports = collect_all('webview')
-        pn_datas, pn_binaries, pn_hiddenimports = collect_all('pythonnet')
-        cl_datas, cl_binaries, cl_hiddenimports = collect_all('clr_loader')
 
-        all_datas = st_datas + wv_datas + pn_datas + cl_datas
-        all_binaries = st_binaries + wv_binaries + pn_binaries + cl_binaries
-        all_hiddenimports = st_hiddenimports + wv_hiddenimports + pn_hiddenimports + cl_hiddenimports
+        all_datas = st_datas
+        all_binaries = st_binaries
+        all_hiddenimports = st_hiddenimports
 
         block_cipher = None
 
@@ -94,7 +91,7 @@ def _write_spec() -> None:
             hookspath=[],
             hooksconfig={{}},
             runtime_hooks=['{_q(_ROOT / "scripts" / "pyi_rth_stockassistant_bootlog.py")}'],
-            excludes=[],
+            excludes=['webview', 'pywebview', 'pythonnet', 'clr', 'clr_loader'],
             win_no_prefer_redirects=False,
             win_private_assemblies=False,
             cipher=block_cipher,
@@ -124,7 +121,7 @@ def _write_spec() -> None:
             a.datas,
             strip=False,
             upx=True,
-            upx_exclude=['Python.Runtime.dll'],
+            upx_exclude=[],
             name='StockAssistant',
         )
     """)

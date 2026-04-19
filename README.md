@@ -119,7 +119,7 @@ The output is `dist/StockAssistant/StockAssistant.exe`.
 ## Architecture (High Level)
 
 - `launcher.py`
-  - Desktop entry point: checks for updates, starts Streamlit as a subprocess, and opens a native pywebview window.
+  - Desktop entry point: checks for updates, starts Streamlit as a subprocess, and opens a native-feeling Edge/Chrome `--app` window.
 - `src/updater.py`
   - Auto-update logic: fetches from origin, compares commits, prompts user, pulls and installs deps.
 - `src/streamlit_app.py`
@@ -183,7 +183,7 @@ ollama pull nomic-embed-text
 
 ### Desktop app (recommended)
 
-Launches the Streamlit backend and opens it in a native window with a taskbar icon (no browser needed). Install deps first (includes **pywebview** — the PyPI name is `pywebview`, not `webview`):
+Launches the Streamlit backend and opens it in a chromeless Edge/Chrome window (looks like a native app — no address bar, no tabs). Install deps first:
 
 ```powershell
 pip install -r requirements.txt
@@ -263,8 +263,8 @@ python src/app.py ask "Is NVDA trending up?"
   - Ask with ticker/company/sector words, or rely on context from prior turns.
 - **Copy button blocked**
   - Browser clipboard permission may be restricted; use the prompt preview box manually.
-- **Desktop: `ModuleNotFoundError: No module named 'webview'` or MSVC error when installing**
-  - Install **`pywebview`**, not the unrelated `webview` package: `pip install pywebview` or `pip install -r requirements.txt`. The import name is `webview`, but the correct install name on PyPI is `pywebview`.
+- **Desktop: no window appears**
+  - The launcher needs **Microsoft Edge** or **Google Chrome** installed. Edge is pre-installed on all Windows 10/11 machines. If neither is found the app falls back to your default browser.
 
 ## Notes
 
