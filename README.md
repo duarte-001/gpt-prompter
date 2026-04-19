@@ -1,14 +1,18 @@
-# Stock Q&A Prompt Generator
+# Stock Assistant
 
-Deterministic stock-data pipeline that prepares a high-quality prompt for external GPT (ChatGPT), with optional local Ollama answering and optional RAG enrichment.
+**Positioning:** an intelligent prompt-generation system that maximizes LLM capabilities for financial reasoning—grounded on reliable data, efficient retrieval, and professional-grade outputs. The **Streamlit UI** leads with plain-language copy; this README keeps technical detail for developers.
 
-## What This App Does
+Ships as a deterministic pipeline plus UI: optional local **Ollama** answers, or prompt-only mode with **Export to GPT** for ChatGPT and similar models.
 
-- Matches symbols from user questions using deterministic logic (ticker regex, aliases, sector keywords, context carry-over).
-- Fetches live market metrics from Yahoo Finance for matched symbols.
-- Optionally retrieves background context from Chroma (RAG).
-- Builds a structured prompt payload (`json` block) that is designed for reliable GPT responses.
-- Exposes an **Export to GPT** UI section with a **Copy GPT prompt** button.
+## What you see in the app (plain-language pillars)
+
+1. **Clear answers** — Straight explanations without drowning you in jargon.
+2. **Live numbers** — Prices and key figures from up-to-date feeds, not guesswork.
+3. **Smart context** — Background notes when they help; live data always comes first.
+4. **Works with your AI** — Export the full prompt to ChatGPT or another assistant in one step.
+5. **Careful tone** — No hype; not personal financial advice.
+
+See `docs/BRANDING.md` for Option A visuals, tone rules, and the technical mapping of these pillars to the pipeline.
 
 ## Current Recommended Workflow
 
@@ -17,10 +21,10 @@ This repository is currently optimized for **prompt generation + external GPT fi
 1. Ask a question in the Streamlit app.
 2. Pipeline resolves symbols/sectors and fetches live metrics.
 3. Pipeline builds structured user content with authoritative `live_market_data`.
-4. Use **Export to GPT (last reply)** -> **Copy GPT prompt**.
+4. Scroll to **Export to GPT (last reply)** → **Copy GPT prompt** → paste into ChatGPT.
 5. Paste in ChatGPT for final response.
 
-By default, **Prompt generator mode is enabled** in the sidebar (`PROMPT_ONLY=1`), so local LLM answer generation is skipped for speed.
+By default, **ChatGPT-style copy only** is enabled in the sidebar (`PROMPT_ONLY=1`): the on-device assistant is skipped for speed so you can export to ChatGPT quickly.
 
 ## How RAG And Intermediate Steps Help
 
@@ -67,6 +71,8 @@ This app is intentionally multi-step. Each step reduces ambiguity before the fin
   - `live_market_data` drives numbers,
   - RAG adds qualitative background,
   - GPT handles final reasoning and writing style.
+
+Timings and live JSON for the last reply are under **Technical details (last reply)** in the Streamlit app.
 
 ## Auto-Updates
 

@@ -1,4 +1,4 @@
-"""Stock Q&A application package."""
+"""Stock Assistant — intelligent prompt generation for financial LLM reasoning."""
 
 import logging
 

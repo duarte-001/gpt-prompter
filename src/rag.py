@@ -16,6 +16,7 @@ import time
 from typing import Any
 
 import chromadb
+from chromadb.config import Settings
 
 from src import config
 from src.fetcher import FetchResult
@@ -30,7 +31,10 @@ def ensure_chroma_dir() -> None:
 
 def get_collection():
     ensure_chroma_dir()
-    client = chromadb.PersistentClient(path=str(config.CHROMA_DIR))
+    client = chromadb.PersistentClient(
+        path=str(config.CHROMA_DIR),
+        settings=Settings(anonymized_telemetry=False),
+    )
     return client.get_or_create_collection(
         name=config.RAG_COLLECTION_NAME,
         metadata={"hnsw:space": "cosine"},

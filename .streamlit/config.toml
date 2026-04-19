@@ -1,2 +1,16 @@
 [server]
 headless = true
+
+# Frozen / PyInstaller bundles are not under site-packages; Streamlit otherwise
+# defaults global.developmentMode to true (Vite on 3000, 404 on / for 8501).
+[global]
+developmentMode = false
+
+# Option A — see docs/BRANDING.md
+[theme]
+base = "dark"
+primaryColor = "#3B82F6"
+backgroundColor = "#0F172A"
+secondaryBackgroundColor = "#111C33"
+textColor = "#E5E7EB"
+font = "sans serif"

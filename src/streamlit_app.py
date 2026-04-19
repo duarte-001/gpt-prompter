@@ -16,9 +16,25 @@ from pathlib import Path
 import streamlit as st
 import streamlit.components.v1 as components
 
-_ROOT = Path(__file__).resolve().parent.parent
+
+def _bundle_root() -> Path:
+    """Project root in dev; PyInstaller ``_MEIPASS`` when frozen (``assets/`` lives here)."""
+    if getattr(sys, "frozen", False):
+        return Path(sys._MEIPASS)
+    return Path(__file__).resolve().parent.parent
+
+
+_ROOT = _bundle_root()
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
+
+_icon_png = _ROOT / "assets" / "icon.png"
+_icon_ico = _ROOT / "assets" / "icon.ico"
+_page_icon: str | None = None
+if _icon_png.exists():
+    _page_icon = str(_icon_png.resolve())
+elif _icon_ico.exists():
+    _page_icon = str(_icon_ico.resolve())
 
 from src import config  # noqa: E402
 from src.config import (  # noqa: E402
@@ -41,12 +57,28 @@ from src.rag import ingest_fetch_results  # noqa: E402
 
 _log = logging.getLogger("stock_qa")
 
-# Override in env if Ollama is not on localhost (no UI field — edit env or config.py).
 OLLAMA_URL = os.environ.get("OLLAMA_BASE_URL", config.OLLAMA_BASE_URL).strip()
 
-st.set_page_config(page_title="Stock assistant", layout="wide", initial_sidebar_state="collapsed")
+_page_cfg: dict = {
+    "page_title": "Stock assistant",
+    "layout": "wide",
+    "initial_sidebar_state": "collapsed",
+}
+if _page_icon:
+    _page_cfg["page_icon"] = _page_icon
+st.set_page_config(**_page_cfg)
 
-# Start local Ollama if needed (connection refused on embed/chat). Set OLLAMA_SKIP_AUTO_START=1 to disable.
+st.markdown(
+    """
+    <style>
+    .stApp a:link, .stApp a:visited { color: #3B82F6 !important; }
+    .stApp a:hover { color: #22D3EE !important; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# Start Ollama once per session (same as original app).
 if "ollama_ready" not in st.session_state:
     with st.spinner("Starting Ollama…"):
         st.session_state["ollama_ready"] = ensure_ollama_running(OLLAMA_URL)
@@ -56,39 +88,54 @@ if "ollama_ready" not in st.session_state:
             "Install it from https://ollama.com or run `ollama serve` in a terminal, then refresh this page."
         )
 
-# One-time warm-up: fetch 2y history for all tickers + index into Chroma for RAG.
-# Set env SKIP_YF_WARM=1 to skip (e.g. slow network).
+# One-time warm-up: fetch + index (original behaviour; robust errors like current main).
 if os.environ.get("SKIP_YF_WARM") == "1":
     st.session_state["yf_warm_done"] = True
 elif "yf_warm_done" not in st.session_state:
     with st.spinner("Pre-loading market data and indexing for RAG (once per session)…"):
         _t_warm = _time.perf_counter()
         _log.info("[warm-up]  Pre-loading market data for all tickers (2y)…")
+        warm_msgs: list[str] = []
         try:
             _warm_map = load_ticker_mapping(TICKERS_JSON)
             _warm_results = fetch_all_tickers(_warm_map, period=DEFAULT_YF_PERIOD)
             _log.info("[warm-up]  Fetch done (%.1fs), indexing to Chroma…", _time.perf_counter() - _t_warm)
-            _indexed, _idx_err = ingest_fetch_results(
-                _warm_results,
-                period=DEFAULT_YF_PERIOD,
-                ollama_base_url=OLLAMA_URL,
-                embed_model=config.OLLAMA_EMBED_MODEL,
-            )
-            if _idx_err:
-                _log.warning("[warm-up]  RAG indexing issue: %s", _idx_err)
-            else:
-                _log.info("[warm-up]  Indexed %d chunk(s) into Chroma", _indexed)
-            _log.info("[warm-up]  Done (%.1fs)", _time.perf_counter() - _t_warm)
         except Exception as e:  # noqa: BLE001
-            _log.error("[warm-up]  Failed (%.1fs): %s", _time.perf_counter() - _t_warm, e)
-            st.session_state["yf_warm_error"] = str(e)
+            _log.error("[warm-up]  Fetch failed (%.1fs): %s", _time.perf_counter() - _t_warm, e)
+            warm_msgs.append(f"market fetch: {e}")
+        else:
+            try:
+                _indexed, _idx_err = ingest_fetch_results(
+                    _warm_results,
+                    period=DEFAULT_YF_PERIOD,
+                    ollama_base_url=OLLAMA_URL,
+                    embed_model=config.OLLAMA_EMBED_MODEL,
+                )
+                if _idx_err:
+                    _log.warning("[warm-up]  RAG indexing issue: %s", _idx_err)
+                    warm_msgs.append(f"RAG index: {_idx_err}")
+                else:
+                    _log.info("[warm-up]  Indexed %d chunk(s) into Chroma", _indexed)
+            except Exception as e:  # noqa: BLE001
+                _log.error("[warm-up]  RAG ingest failed: %s", e)
+                warm_msgs.append(f"RAG: {e}")
+            _log.info("[warm-up]  Done (%.1fs)", _time.perf_counter() - _t_warm)
+        if warm_msgs:
+            st.session_state["yf_warm_error"] = "; ".join(warm_msgs)
     st.session_state["yf_warm_done"] = True
 
 if err := st.session_state.get("yf_warm_error"):
-    st.warning(f"Market data pre-load had an issue (data will still load on demand): {err}")
+    st.warning(
+        "Warm-up note (the app still works; Yahoo history uses the last session when there is no bar for today yet): "
+        f"{err}"
+    )
     del st.session_state["yf_warm_error"]
 
-# Sidebar: model name only (Ollama URL + embed model + period come from config.py).
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "conversation_summary" not in st.session_state:
+    st.session_state.conversation_summary = ""
+
 with st.sidebar:
     st.header("Model")
     ollama_model = st.text_input(
@@ -97,17 +144,14 @@ with st.sidebar:
         help="Chat model, e.g. llama3.2",
     )
     prompt_only = st.checkbox(
-    "Prompt generator (skip local answer)",
-    value=os.environ.get("PROMPT_ONLY", "1").strip() == "1",  # default "1" = True
-    help="Fetch + RAG only; no Ollama chat. Fastest path to **Export to GPT**.",
-)
+        "Prompt generator (skip local answer)",
+        value=os.environ.get("PROMPT_ONLY", "1").strip() == "1",
+        help="Fetch + RAG only; no Ollama chat. Fastest path to **Export to GPT**.",
+    )
 
-# RAG: on by default. Indexing on every question is expensive and usually
-# redundant because warm-up already indexed the universe for retrieval.
 USE_RAG = True
 INDEX_METRICS_TO_RAG = os.environ.get("INDEX_RAG_EACH_ASK", "0").strip() == "1"
 
-# --- Main: chat ---
 c1, c2 = st.columns([4, 1])
 with c1:
     st.title("Stock assistant")
@@ -126,11 +170,6 @@ st.caption(
     "Not financial advice."
 )
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "conversation_summary" not in st.session_state:
-    st.session_state.conversation_summary = ""
-
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
@@ -139,66 +178,71 @@ if prompt := st.chat_input(
     placeholder="Ask about a stock — e.g. Is it a good time to look at NVDA? What should I watch?",
 ):
     st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.markdown(prompt)
 
     prior = st.session_state.messages[:-1]
     recent = prior[-4:] if prior else []
 
     assistant_text = ""
-    try:
-        with st.status("Processing your question…", expanded=True) as status:
-            def on_step(label: str, detail: str) -> None:
-                if label:
-                    status.update(label=label)
-                if detail:
-                    status.write(detail)
-
-            res = answer_question(
-                prompt.strip(),
-                period=DEFAULT_YF_PERIOD,
-                tickers_json_path=None,
-                model=ollama_model.strip() or None,
-                ollama_base_url=OLLAMA_URL,
-                embedding_model=config.OLLAMA_EMBED_MODEL,
-                use_rag=USE_RAG,
-                index_metrics_to_rag=INDEX_METRICS_TO_RAG,
-                conversation_summary=st.session_state.conversation_summary,
-                recent_messages=recent,
-                prior_message_count=len(prior),
-                step_callback=on_step,
-                skip_llm=prompt_only,
-            )
-
-            total = res.timings.get("total", 0)
-            if res.error and not res.answer:
-                status.update(label=f"Completed with errors ({total}s)", state="error")
-            else:
-                status.update(label=f"Done in {total}s", state="complete", expanded=False)
-
-        st.session_state["qa_result"] = res
+    with st.chat_message("assistant"):
         try:
-            log_qa_result(
-                prompt.strip(),
-                res,
-                period=DEFAULT_YF_PERIOD,
-                use_rag=USE_RAG,
-            )
-        except Exception:
-            pass
-        if res.error and not res.answer:
-            assistant_text = f"**Could not complete the request.**\n\n{res.error}"
-        else:
-            assistant_text = res.answer or "_No text returned._"
-            if prompt_only and assistant_text == SKIP_LLM_PLACEHOLDER:
-                assistant_text = (
-                    "**Prompt ready.** Open **Export to GPT** below, copy the "
-                    "Messages JSON or single prompt, then paste into ChatGPT."
+            with st.status("Processing your question…", expanded=True) as status:
+                def on_step(label: str, detail: str) -> None:
+                    if label:
+                        status.update(label=label)
+                    if detail:
+                        status.write(detail)
+
+                res = answer_question(
+                    prompt.strip(),
+                    period=DEFAULT_YF_PERIOD,
+                    tickers_json_path=None,
+                    model=ollama_model.strip() or None,
+                    ollama_base_url=OLLAMA_URL,
+                    embedding_model=config.OLLAMA_EMBED_MODEL,
+                    use_rag=USE_RAG,
+                    index_metrics_to_rag=INDEX_METRICS_TO_RAG,
+                    conversation_summary=st.session_state.conversation_summary,
+                    recent_messages=recent,
+                    prior_message_count=len(prior),
+                    step_callback=on_step,
+                    skip_llm=prompt_only,
                 )
-            if res.symbols_used:
-                assistant_text += f"\n\n---\n_Symbols with live data: {', '.join(res.symbols_used)}._"
-            if res.rag_error:
-                assistant_text += f"\n\n_Note (retrieval): {res.rag_error}_"
-    except Exception as e:  # noqa: BLE001
-        assistant_text = f"**Error:** {e}"
+
+                total = res.timings.get("total", 0)
+                if res.error and not res.answer:
+                    status.update(label=f"Completed with errors ({total}s)", state="error")
+                else:
+                    status.update(label=f"Done in {total}s", state="complete", expanded=False)
+
+            st.session_state["qa_result"] = res
+            try:
+                log_qa_result(
+                    prompt.strip(),
+                    res,
+                    period=DEFAULT_YF_PERIOD,
+                    use_rag=USE_RAG,
+                )
+            except Exception:
+                pass
+            if res.error and not res.answer:
+                assistant_text = f"**Could not complete the request.**\n\n{res.error}"
+            else:
+                assistant_text = res.answer or "_No text returned._"
+                if prompt_only and assistant_text == SKIP_LLM_PLACEHOLDER:
+                    assistant_text = (
+                        "**Prompt ready.** Open **Export to GPT** below, copy the "
+                        "Messages JSON or single prompt, then paste into ChatGPT."
+                    )
+                if res.symbols_used:
+                    assistant_text += f"\n\n---\n_Symbols with live data: {', '.join(res.symbols_used)}._"
+                if res.rag_error:
+                    assistant_text += f"\n\n_Note (retrieval): {res.rag_error}_"
+            st.markdown(assistant_text)
+        except Exception as e:  # noqa: BLE001
+            assistant_text = f"**Error:** {e}"
+            st.markdown(assistant_text)
 
     st.session_state.messages.append({"role": "assistant", "content": assistant_text})
 
@@ -228,7 +272,6 @@ with st.expander("Technical details (last reply)", expanded=False):
 
 
 def _messages_to_paste_text(messages: list[dict[str, str]]) -> str:
-    """Human-readable single blob for manual paste (matches multi-turn order)."""
     chunks: list[str] = []
     for m in messages:
         role = (m.get("role") or "user").upper()
@@ -237,10 +280,6 @@ def _messages_to_paste_text(messages: list[dict[str, str]]) -> str:
 
 
 def _build_gpt_export_prompt() -> str:
-    """
-    Full text to paste into ChatGPT (system + recent turns + structured user block).
-    Matches what the local LLM receives when export_messages is present.
-    """
     res = st.session_state.get("qa_result")
     if not res:
         return ""
@@ -249,7 +288,6 @@ def _build_gpt_export_prompt() -> str:
     if export:
         return _messages_to_paste_text(export)
 
-    # Fallback: rebuild structured payload (same as pipeline)
     msgs_hist = st.session_state.messages
     if len(msgs_hist) >= 2 and msgs_hist[-1].get("role") == "assistant":
         prior_messages = msgs_hist[:-2]
@@ -288,7 +326,6 @@ def _build_gpt_export_prompt() -> str:
 
 
 def _render_copy_gpt_prompt_button(prompt_text: str) -> None:
-    """Copy the full prompt to the visitor's clipboard (browser)."""
     if not prompt_text:
         return
     js_str = json.dumps(prompt_text)

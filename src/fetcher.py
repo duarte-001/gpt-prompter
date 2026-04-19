@@ -109,16 +109,19 @@ def fetch_ticker_history(
             if inc.empty:
                 df = stale
                 log.info(
-                    "[fetch]    %s: incremental fetch empty, reusing %d cached rows",
+                    "[fetch]    %s: incremental fetch empty, reusing %d cached rows (e.g. market closed)",
                     symbol,
                     len(stale),
                 )
             else:
-                df = inc
+                merged = pd.concat([stale, inc])
+                merged = merged[~merged.index.duplicated(keep="last")].sort_index()
+                df = merged
                 log.info(
-                    "[fetch]    %s: incremental fetch +%d new session(s) (merge on save)",
+                    "[fetch]    %s: merged incremental +%d new row(s) → %d total",
                     symbol,
                     len(inc),
+                    len(df),
                 )
         except Exception as e:  # noqa: BLE001
             log.warning(

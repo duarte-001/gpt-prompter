@@ -72,7 +72,7 @@ def cmd_fetch(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Stock Q&A app")
+    parser = argparse.ArgumentParser(description="Stock Assistant — CLI tools")
     sub = parser.add_subparsers(dest="command", required=False)
 
     p_echo = sub.add_parser("echo", help="Print question (skeleton)")

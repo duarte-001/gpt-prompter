@@ -9,7 +9,10 @@ A dedicated clean venv (.venv-build) is used automatically so that only
 the app's actual dependencies end up in the bundle (not any globally
 installed heavy packages like torch that would crash PyInstaller).
 
-Output:  dist/StockAssistant/StockAssistant.exe  (one-dir mode)
+Output: ``dist/StockAssistant/StockAssistant.exe`` (one-dir mode).
+
+Intermediate publish copies live under ``%TEMP%/StockAssistant_build/`` only — never a
+second app folder inside ``dist/`` (avoids a leftover ``StockAssistant_staging``).
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 _DEBUG_BUILD = "--debug" in sys.argv
@@ -94,15 +98,26 @@ def _write_spec() -> None:
         for p in sorted((_ROOT / "src").glob("*.py"))
         if p.stem != "__init__"
     ]
-    hidden_imports = ["src"] + src_modules
+    # Chroma: ProductTelemetryClient via importlib; ServerAPI defaults to chromadb.api.rust.RustBindingsAPI
+    # (string in Settings) so PyInstaller never traces it. chromadb_rust_bindings ships a large .pyd.
+    hidden_imports = ["src"] + src_modules + [
+        "chromadb.telemetry.product.posthog",
+        "chromadb.api.rust",
+        "chromadb_rust_bindings",
+    ]
 
     hidden_str = repr(hidden_imports)
 
     datas = [
         (str(_ROOT / "some_tickers.json"), "."),
         (str(_ROOT / "requirements.txt"), "."),
+        # Same icon as embedded .exe — beside launcher for desktop shortcuts (IconLocation)
+        (str(_ROOT / "assets" / "icon.ico"), "."),
         (str(_ROOT / "assets"), "assets"),
         (str(_ROOT / ".streamlit"), ".streamlit"),
+        # Streamlit bootstrap needs a real script path on disk; hiddenimports alone
+        # only place modules in the archive (no _internal/src/streamlit_app.py).
+        (str(_ROOT / "src"), "src"),
     ]
     datas_str = repr([(s.replace("\\", "/"), d) for s, d in datas])
 
@@ -113,10 +128,13 @@ def _write_spec() -> None:
         from PyInstaller.utils.hooks import collect_all, collect_data_files
 
         st_datas, st_binaries, st_hiddenimports = collect_all('streamlit')
+        chroma_rust_datas, chroma_rust_binaries, chroma_rust_hiddenimports = collect_all(
+            'chromadb_rust_bindings'
+        )
 
-        all_datas = st_datas
-        all_binaries = st_binaries
-        all_hiddenimports = st_hiddenimports
+        all_datas = st_datas + chroma_rust_datas
+        all_binaries = st_binaries + chroma_rust_binaries
+        all_hiddenimports = st_hiddenimports + chroma_rust_hiddenimports
 
         block_cipher = None
 
@@ -190,10 +208,31 @@ def main() -> None:
 
     if result.returncode == 0:
         final_dist = _ROOT / "dist" / "StockAssistant"
+        # Old builds used dist/StockAssistant_staging — remove so dist/ never looks like two apps.
+        legacy_staging = _ROOT / "dist" / "StockAssistant_staging"
+        if legacy_staging.exists():
+            shutil.rmtree(legacy_staging, ignore_errors=True)
         if final_dist.exists():
-            shutil.rmtree(final_dist, ignore_errors=True)
+            for _ in range(5):
+                shutil.rmtree(final_dist, ignore_errors=True)
+                if not final_dist.exists():
+                    break
+                time.sleep(0.4)
         (_ROOT / "dist").mkdir(exist_ok=True)
-        shutil.copytree(dist_dir / "StockAssistant", final_dist)
+        publish_staging = build_base / "StockAssistant_publish_next"
+        if publish_staging.exists():
+            shutil.rmtree(publish_staging, ignore_errors=True)
+        shutil.copytree(dist_dir / "StockAssistant", publish_staging)
+        try:
+            if final_dist.exists():
+                shutil.rmtree(final_dist, ignore_errors=True)
+                time.sleep(0.15)
+            shutil.move(str(publish_staging), str(final_dist))
+        except OSError:
+            shutil.rmtree(final_dist, ignore_errors=True)
+            time.sleep(0.15)
+            shutil.copytree(publish_staging, final_dist)
+            shutil.rmtree(publish_staging, ignore_errors=True)
         exe = final_dist / "StockAssistant.exe"
         print(f"\nBuild succeeded.\nExecutable: {exe}")
     else:

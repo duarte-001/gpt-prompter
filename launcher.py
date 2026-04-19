@@ -9,7 +9,6 @@ Usage:  python launcher.py
 from __future__ import annotations
 
 import atexit
-import json
 import logging
 import os
 import shutil
@@ -31,12 +30,14 @@ def _get_root() -> Path:
 
 
 _ROOT = _get_root()
-_ICON = _ROOT / "assets" / "icon.ico"
 _STREAMLIT_SCRIPT = _ROOT / "src" / "streamlit_app.py"
 
 _HOST = "127.0.0.1"
 _PORT = 8501
-_URL = f"http://{_HOST}:{_PORT}"
+# Health checks and server wait use the origin only.
+_SERVER_BASE_URL = f"http://{_HOST}:{_PORT}"
+# Streamlit 1.5x may return 404 on ``/`` while the app UI lives under ``/app`` (esp. frozen bundles).
+_BROWSER_APP_URL = f"{_SERVER_BASE_URL}/app"
 _STARTUP_TIMEOUT = 60
 
 # ---------------------------------------------------------------------------
@@ -44,26 +45,6 @@ _STARTUP_TIMEOUT = 60
 # ---------------------------------------------------------------------------
 _log = logging.getLogger("launcher")
 _ACTIVE_LOG_PATH: str | None = None
-_DEBUG_LOG_PATH = Path(__file__).resolve().parent / "debug-5af0ea.log"
-
-
-def _debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: dict) -> None:
-    # region agent log
-    payload = {
-        "sessionId": "5af0ea",
-        "runId": run_id,
-        "hypothesisId": hypothesis_id,
-        "location": location,
-        "message": message,
-        "data": data,
-        "timestamp": int(time.time() * 1000),
-    }
-    try:
-        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, ensure_ascii=True) + "\n")
-    except OSError:
-        pass
-    # endregion
 
 
 def _is_frozen() -> bool:
@@ -95,9 +76,17 @@ def _boot_temp_stamp_path() -> Path:
     return Path(tempfile.gettempdir()) / "StockAssistant_last_boot.log"
 
 
+def _is_streamlit_worker_argv() -> bool:
+    return _is_frozen() and len(sys.argv) > 1 and sys.argv[1] == "--streamlit-worker"
+
+
 def _boot_frozen_traces() -> None:
-    """Append a boot line as soon as the frozen process starts (before main)."""
-    if not _is_frozen():
+    """Append a boot line as soon as the frozen process starts (before main).
+
+    The Streamlit worker is a second process by design; skip duplicate boot lines
+    there so logs reflect one user-facing app session.
+    """
+    if not _is_frozen() or _is_streamlit_worker_argv():
         return
     stamp = (
         f"{time.strftime('%Y-%m-%d %H:%M:%S')} launcher_boot pid={os.getpid()} "
@@ -140,55 +129,39 @@ def _setup_logging() -> None:
 
 
 def _server_ready(url: str) -> bool:
-    """Return True when *url* responds with HTTP 200 (not just a TCP accept)."""
+    """Return True when Streamlit health responds, with fallback to root HTTP reachability."""
     from urllib.request import urlopen
-    from urllib.error import URLError
+    from urllib.error import HTTPError, URLError
+
+    health_url = f"{url.rstrip('/')}/_stcore/health"
+    try:
+        with urlopen(health_url, timeout=2) as resp:
+            return resp.status == 200
+    except HTTPError as exc:
+        # Some deployments may block this endpoint, but a non-5xx code
+        # still proves the Streamlit HTTP server is up.
+        if exc.code < 500:
+            return True
+    except (URLError, OSError, ValueError):
+        pass
+
     try:
         with urlopen(url, timeout=2) as resp:
-            return resp.status == 200
+            return 200 <= resp.status < 500
+    except HTTPError as exc:
+        return 200 <= exc.code < 500
     except (URLError, OSError, ValueError):
         return False
 
 
 def _wait_for_server(url: str, timeout: float, proc: subprocess.Popen | None = None) -> bool:
     deadline = time.monotonic() + timeout
-    checks = 0
     while time.monotonic() < deadline:
-        checks += 1
         if proc is not None and proc.poll() is not None:
-            _debug_log(
-                run_id="initial",
-                hypothesis_id="H1",
-                location="launcher.py:_wait_for_server",
-                message="worker exited before readiness",
-                data={"poll_returncode": proc.returncode, "checks": checks},
-            )
             return False
         if _server_ready(url):
-            _debug_log(
-                run_id="initial",
-                hypothesis_id="H2",
-                location="launcher.py:_wait_for_server",
-                message="health check returned HTTP 200",
-                data={"checks": checks, "url": url},
-            )
             return True
-        if checks in (1, 20, 60, 100):
-            _debug_log(
-                run_id="initial",
-                hypothesis_id="H4",
-                location="launcher.py:_wait_for_server",
-                message="server still not ready",
-                data={"checks": checks, "elapsed_s": round(timeout - (deadline - time.monotonic()), 2)},
-            )
         time.sleep(0.5)
-    _debug_log(
-        run_id="initial",
-        hypothesis_id="H4",
-        location="launcher.py:_wait_for_server",
-        message="startup timeout reached",
-        data={"timeout_s": timeout, "checks": checks},
-    )
     return False
 
 
@@ -246,8 +219,8 @@ def _check_for_updates() -> bool:
 # Native-feeling window via Edge / Chrome --app mode
 # ---------------------------------------------------------------------------
 
-def _find_edge_or_chrome() -> str | None:
-    """Return the path to msedge.exe or chrome.exe, or None."""
+def _find_chrome_or_edge_executable() -> str | None:
+    """Return chrome.exe or msedge.exe path. Chrome is preferred when both exist."""
     if sys.platform != "win32":
         return shutil.which("google-chrome") or shutil.which("chromium-browser")
 
@@ -256,22 +229,26 @@ def _find_edge_or_chrome() -> str | None:
         base = os.environ.get(env_var)
         if not base:
             continue
-        candidates.append(Path(base) / "Microsoft" / "Edge" / "Application" / "msedge.exe")
         candidates.append(Path(base) / "Google" / "Chrome" / "Application" / "chrome.exe")
+        candidates.append(Path(base) / "Microsoft" / "Edge" / "Application" / "msedge.exe")
 
     for p in candidates:
         if p.exists():
             return str(p)
 
-    return shutil.which("msedge") or shutil.which("chrome") or shutil.which("google-chrome")
+    return shutil.which("chrome") or shutil.which("google-chrome") or shutil.which("msedge")
 
 
-def _launch_app_mode_window(url: str) -> subprocess.Popen | None:
-    """Open *url* in a chromeless Edge/Chrome window (--app mode). Returns the process or None."""
-    browser = _find_edge_or_chrome()
+def _launch_app_mode_window(url: str) -> tuple[subprocess.Popen | None, Path | None]:
+    """Open *url* in a chromeless Edge/Chrome window (--app mode).
+
+    Returns ``(popen, profile_dir)``. On Windows, *profile_dir* is the ``--user-data-dir``
+    passed to the browser (used to wait for detached Chrome/Edge children). Else *profile_dir* is None.
+    """
+    browser = _find_chrome_or_edge_executable()
     if not browser:
         _log.warning("No Edge or Chrome found for --app mode")
-        return None
+        return None, None
 
     user_data = _win_local_appdata_dir() / "browser-profile" if sys.platform == "win32" else None
     cmd = [
@@ -279,29 +256,138 @@ def _launch_app_mode_window(url: str) -> subprocess.Popen | None:
         f"--app={url}",
         "--no-first-run",
         "--disable-extensions",
-        f"--window-size=1200,820",
+        "--start-maximized",
     ]
     if user_data:
         cmd.append(f"--user-data-dir={user_data}")
     _log.info("Launching app-mode window: %s", " ".join(cmd))
     try:
-        return subprocess.Popen(
+        proc = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
+        return proc, user_data
     except OSError as exc:
         _log.warning("Failed to launch app-mode window: %s", exc)
+        return None, None
+
+
+def _win_browser_process_count_using_profile(profile_dir: Path) -> int | None:
+    """Count chrome.exe/msedge.exe whose command line references *profile_dir*.
+
+    Uses both the resolved path and a short path fragment because WMI command lines
+    may omit or shorten ``--user-data-dir=`` paths, and Chrome may use ``/`` or ``\\``.
+
+    Returns None if the query failed (caller should not rely on the result).
+    """
+    if sys.platform != "win32":
+        return 0
+    m1 = str(profile_dir.resolve()).lower().replace("'", "''")
+    m2 = "stockassistant\\browser-profile"
+    script = (
+        f"$m1 = '{m1}'; $m2 = '{m2}'; "
+        "$n = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | "
+        "Where-Object { $_.Name -and $_.CommandLine -and ($_.Name.ToLower() -in @('chrome.exe','msedge.exe')) "
+        "  -and (($cl = $_.CommandLine.ToLower().Replace([char]0x2F,[char]0x5C)) -and "
+        "         ($cl.Contains($m1) -or $cl.Contains($m2))) }); "
+        "$n.Count"
+    )
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if out.returncode != 0:
+            _log.warning("Profile process query failed (rc=%s): %s", out.returncode, (out.stderr or "").strip()[:500])
+            return None
+        line = (out.stdout or "").strip().splitlines()
+        last = line[-1].strip() if line else ""
+        return int(last)
+    except (ValueError, OSError, subprocess.SubprocessError) as exc:
+        _log.warning("Profile process query error: %s", exc)
         return None
 
 
-def _open_browser_fallback(reason: str = "") -> None:
-    """Open in the default browser (no blocking dialog)."""
+def _wait_for_app_mode_browser_exit(browser_proc: subprocess.Popen, profile_dir: Path | None) -> None:
+    """Block until the user-facing browser session is gone.
+
+    On Windows, ``chrome.exe`` / ``msedge.exe`` often exit immediately after spawning a
+    long-lived child; ``wait()`` on the parent therefore must not be treated as the user
+    having closed the app. If the starter PID is long-lived instead, children may already
+    be gone when ``wait()`` returns, so we record profile-tagged processes *while* waiting.
+    """
+    stop_monitor = threading.Event()
+    profile_seen = threading.Event()
+
+    def _monitor_profile() -> None:
+        if profile_dir is None:
+            return
+        while not stop_monitor.wait(0.5):
+            n = _win_browser_process_count_using_profile(profile_dir)
+            if n is not None and n > 0:
+                profile_seen.set()
+
+    monitor_th: threading.Thread | None = None
+    if sys.platform == "win32" and profile_dir is not None:
+        monitor_th = threading.Thread(target=_monitor_profile, name="browser-profile-monitor", daemon=True)
+        monitor_th.start()
+
+    browser_proc.wait()
+
+    if monitor_th is not None:
+        stop_monitor.set()
+        monitor_th.join(timeout=2.0)
+
+    if sys.platform != "win32" or profile_dir is None:
+        return
+
+    if not profile_seen.is_set():
+        _log.debug(
+            "Browser starter exited without observing profile-tagged chrome/msedge children "
+            "(single long-lived process or WMI did not expose command lines)."
+        )
+        return
+
+    _log.info("Waiting for browser processes using profile %s to exit …", profile_dir)
+    while True:
+        n = _win_browser_process_count_using_profile(profile_dir)
+        if n is None:
+            _log.warning("Profile process query failed while waiting for browser shutdown.")
+            return
+        if n == 0:
+            break
+        time.sleep(1.0)
+
+
+def _open_url_with_installed_browser(url: str) -> None:
+    """Open *url* using Chrome or Edge if installed; avoids Windows ``webbrowser`` defaulting to Edge."""
+    if sys.platform == "win32":
+        exe = _find_chrome_or_edge_executable()
+        if exe:
+            try:
+                subprocess.Popen(
+                    [exe, url],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+                return
+            except OSError as exc:
+                _log.warning("Could not start browser %s: %s", exe, exc)
     import webbrowser
 
+    webbrowser.open(url)
+
+
+def _open_browser_fallback(reason: str = "") -> None:
+    """Open in Chrome/Edge when possible, else the default browser (no blocking dialog)."""
     _log.info("Opening in default browser. Reason: %s", reason)
-    webbrowser.open(_URL)
+    _open_url_with_installed_browser(_BROWSER_APP_URL)
 
 
 # ---------------------------------------------------------------------------
@@ -347,17 +433,19 @@ def _streamlit_flag_options() -> dict:
 def _streamlit_worker_entry() -> None:
     """Second process: Streamlit bootstrap on the real main thread (signal handlers work)."""
     _apply_streamlit_env()
-    _debug_log(
-        run_id="initial",
-        hypothesis_id="H1",
-        location="launcher.py:_streamlit_worker_entry",
-        message="worker entry reached",
-        data={"pid": os.getpid(), "script": str(_STREAMLIT_SCRIPT), "flags": _streamlit_flag_options()},
-    )
     _log.info("streamlit-worker: importing bootstrap …")
-    from streamlit.web.bootstrap import run as st_run
+    # Mirror ``streamlit run``: apply flag_options before ``bootstrap.run``.
+    # Without this, frozen installs keep Streamlit's default ``global.developmentMode=true``
+    # (no ``site-packages`` in paths), which binds the UI to the Vite port (3000), breaks
+    # ``/`` on 8501, and can trigger ``webbrowser.open`` → Edge on Windows.
+    import streamlit.config as st_config
+    from streamlit.web.bootstrap import load_config_options, run as st_run
 
-    st_run(str(_STREAMLIT_SCRIPT), False, [], _streamlit_flag_options())
+    script_abs = os.path.abspath(str(_STREAMLIT_SCRIPT))
+    st_config._main_script_path = script_abs
+    flags = _streamlit_flag_options()
+    load_config_options(flags)
+    st_run(script_abs, False, [], flags)
 
 
 def _worker_log_path() -> Path:
@@ -367,7 +455,9 @@ def _worker_log_path() -> Path:
 def _start_streamlit_frozen_worker() -> subprocess.Popen:
     """Re-launch same .exe with --streamlit-worker (Streamlit cannot run in a daemon thread)."""
     _apply_streamlit_env()
-    _log.info("Starting Streamlit worker subprocess …")
+    _log.info(
+        "Starting embedded Streamlit server (helper process, same app — not a second launch) …"
+    )
     wlog = _worker_log_path()
     wlog.parent.mkdir(parents=True, exist_ok=True)
     wlog_fh = open(wlog, "w", encoding="utf-8")
@@ -377,13 +467,6 @@ def _start_streamlit_frozen_worker() -> subprocess.Popen:
         stdout=wlog_fh,
         stderr=subprocess.STDOUT,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    _debug_log(
-        run_id="initial",
-        hypothesis_id="H5",
-        location="launcher.py:_start_streamlit_frozen_worker",
-        message="spawned frozen worker",
-        data={"pid": proc.pid, "argv": [sys.executable, "--streamlit-worker"], "wlog": str(wlog)},
     )
     _log.info("Worker log: %s", wlog)
     return proc
@@ -395,13 +478,6 @@ def _start_streamlit_frozen_worker() -> subprocess.Popen:
 
 def main() -> None:
     _setup_logging()
-    _debug_log(
-        run_id="initial",
-        hypothesis_id="H3",
-        location="launcher.py:main",
-        message="launcher main entered",
-        data={"pid": os.getpid(), "argv": sys.argv, "is_frozen": _is_frozen(), "exe": sys.executable},
-    )
     _log.info("launcher start  frozen=%s  python=%s  root=%s", _is_frozen(), sys.version, _ROOT)
 
     if not _is_frozen() and "--skip-update" not in sys.argv:
@@ -426,7 +502,7 @@ def main() -> None:
 
     signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
 
-    if not _wait_for_server(_URL, _STARTUP_TIMEOUT, proc):
+    if not _wait_for_server(_SERVER_BASE_URL, _STARTUP_TIMEOUT, proc):
         reason = "Streamlit did not respond with HTTP 200 within 60 s"
         if proc is not None and proc.poll() is not None:
             reason = f"Streamlit process exited early (code {proc.returncode})"
@@ -448,10 +524,10 @@ def main() -> None:
 
     _log.info("Streamlit is listening — launching native window")
 
-    browser_proc = _launch_app_mode_window(_URL)
+    browser_proc, browser_profile = _launch_app_mode_window(_BROWSER_APP_URL)
     if browser_proc:
         _log.info("App-mode window launched (pid %d), waiting for it to close …", browser_proc.pid)
-        browser_proc.wait()
+        _wait_for_app_mode_browser_exit(browser_proc, browser_profile)
         _log.info("App-mode window closed")
     else:
         _open_browser_fallback(reason="Edge/Chrome not found for app-mode window")
@@ -491,22 +567,8 @@ def _write_crash_report(text: str) -> None:
 
 if __name__ == "__main__":
     _boot_frozen_traces()
-    _debug_log(
-        run_id="initial",
-        hypothesis_id="H5",
-        location="launcher.py:__main__",
-        message="module entrypoint",
-        data={"pid": os.getpid(), "argv": sys.argv, "is_frozen": _is_frozen(), "exe": sys.executable},
-    )
-    if _is_frozen() and len(sys.argv) > 1 and sys.argv[1] == "--streamlit-worker":
+    if _is_streamlit_worker_argv():
         _setup_logging()
-        _debug_log(
-            run_id="initial",
-            hypothesis_id="H5",
-            location="launcher.py:__main__",
-            message="worker mode branch taken",
-            data={"pid": os.getpid(), "argv": sys.argv},
-        )
         try:
             _streamlit_worker_entry()
         finally:
