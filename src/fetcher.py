@@ -11,9 +11,10 @@ JSON/CSV exports of summaries remain explicit (CLI, Streamlit, data/exports/).
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 import numpy as np
 import pandas as pd
@@ -31,6 +32,34 @@ log = logging.getLogger("stock_qa")
 # yfinance appends these; metrics spec uses OHLCV only for features
 _DROP_SESSION_KEYS = frozenset({"Dividends", "Stock Splits", "Capital Gains"})
 
+_T = TypeVar("_T")
+
+
+def _yf_fetch_attempts() -> int:
+    raw = os.environ.get("YF_FETCH_RETRIES", "3").strip()
+    try:
+        n = int(raw)
+    except ValueError:
+        return 3
+    return max(1, min(n, 8))
+
+
+def _call_with_backoff(label: str, fn: Callable[[], _T]) -> _T:
+    """Retry transient Yahoo / network failures (TLS inspection, flaky Wi‑Fi, etc.)."""
+    attempts = _yf_fetch_attempts()
+    last: Exception | None = None
+    for i in range(attempts):
+        try:
+            return fn()
+        except Exception as e:  # noqa: BLE001
+            last = e
+            log.warning("[fetch]    %s attempt %d/%d: %s", label, i + 1, attempts, e)
+            if i == attempts - 1:
+                raise
+            delay = 1.0 * (2**i)
+            time.sleep(delay)
+    raise last  # pragma: no cover
+
 
 @dataclass
 class FetchResult:
@@ -47,7 +76,11 @@ def _fetch_ticker_history_from_network(
     period: str = config.DEFAULT_YF_PERIOD,
 ) -> pd.DataFrame:
     t = yf.Ticker(symbol)
-    df = t.history(period=period, auto_adjust=False)
+
+    def _once() -> pd.DataFrame:
+        return t.history(period=period, auto_adjust=False)
+
+    df = _call_with_backoff(symbol, _once)
     if df.empty:
         return df
     df = df.rename(
@@ -73,7 +106,11 @@ def _fetch_incremental_network(symbol: str, stale: pd.DataFrame) -> pd.DataFrame
     last = stale.index[-1]
     start = last + pd.Timedelta(days=1)
     t = yf.Ticker(symbol)
-    df = t.history(start=start, auto_adjust=False)
+
+    def _once() -> pd.DataFrame:
+        return t.history(start=start, auto_adjust=False)
+
+    df = _call_with_backoff(f"{symbol}+inc", _once)
     if df.empty:
         return df
     df = df.rename(

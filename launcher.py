@@ -433,6 +433,10 @@ def _streamlit_flag_options() -> dict:
 def _streamlit_worker_entry() -> None:
     """Second process: Streamlit bootstrap on the real main thread (signal handlers work)."""
     _apply_streamlit_env()
+    # PyInstaller puts ``.streamlit/config.toml`` under ``_MEIPASS``; the worker's cwd was the
+    # folder next to the .exe, so Streamlit never saw the theme file (light/white UI).
+    if getattr(sys, "frozen", False):
+        os.chdir(sys._MEIPASS)
     _log.info("streamlit-worker: importing bootstrap …")
     # Mirror ``streamlit run``: apply flag_options before ``bootstrap.run``.
     # Without this, frozen installs keep Streamlit's default ``global.developmentMode=true``

@@ -63,9 +63,22 @@ OLLAMA_URL = os.environ.get("OLLAMA_BASE_URL", config.OLLAMA_BASE_URL).strip()
 BRAND_PRIMARY = "#3B82F6"
 BRAND_ACCENT = "#22D3EE"
 BRAND_TEXT = "#E5E7EB"
+BRAND_BASE = "#0F172A"
 BRAND_SURFACE = "#111C33"
 BRAND_BORDER = "#1E293B"
 BRAND_DANGER = "#F87171"
+
+
+def _env_prompt_only_default_on() -> bool:
+    """True when local Ollama chat is off (default: PROMPT_ONLY unset or ``1``)."""
+    return os.environ.get("PROMPT_ONLY", "1").strip() != "0"
+
+
+def _skip_ollama_boot() -> bool:
+    """Skip starting/reachability checks for Ollama when only prompt export is used."""
+    if os.environ.get("SKIP_OLLAMA_BOOT", "").strip() == "1":
+        return True
+    return _env_prompt_only_default_on()
 
 _page_cfg: dict = {
     "page_title": "Stock Assistant",
@@ -79,6 +92,14 @@ st.set_page_config(**_page_cfg)
 st.markdown(
     f"""
     <style>
+    /* Option A slate — enforced here so the UI stays dark if .streamlit/config.toml
+       is not picked up (e.g. wrong cwd before launcher fix) or the host forces light chrome. */
+    html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stAppViewContainer"] > section {{
+      background-color: {BRAND_BASE} !important;
+    }}
+    [data-testid="stHeader"] {{
+      background-color: rgba(15, 23, 42, 0.92) !important;
+    }}
     .stApp a:link, .stApp a:visited {{ color: #3B82F6 !important; }}
     .stApp a:hover {{ color: #22D3EE !important; }}
     .welcome-card {{
@@ -125,6 +146,35 @@ if "boot_notes" not in st.session_state:
     st.session_state["boot_notes"] = []
 
 
+def _warm_fetch_hint(msg: str) -> str:
+    """Append actionable context when Yahoo / TLS fails (often AV or corporate proxy)."""
+    low = msg.lower()
+    hint = ""
+    if any(
+        x in low
+        for x in (
+            "ssl",
+            "certificate",
+            "cert",
+            "tls",
+            "connection",
+            "timed out",
+            "timeout",
+            "10054",
+            "10060",
+            "refused",
+            "403",
+            "401",
+            "blocked",
+        )
+    ):
+        hint = (
+            " If this persists, allow this app (or Python) through the firewall/antivirus HTTPS scan, "
+            "or try another network / mobile hotspot — Yahoo Finance must be reachable for live data."
+        )
+    return f"market fetch: {msg}{hint}"
+
+
 def _render_welcome_boot() -> None:
     st.title("Stock Assistant")
     st.caption(
@@ -163,8 +213,16 @@ def _run_boot_sequence() -> None:
     st.session_state["boot_stage"] = "starting_ollama"
     _set("Starting model runtime", 15)
     if "ollama_ready" not in st.session_state:
-        st.session_state["ollama_ready"] = ensure_ollama_running(OLLAMA_URL)
-    if st.session_state["ollama_ready"]:
+        if _skip_ollama_boot():
+            st.session_state["ollama_ready"] = False
+            st.session_state["ollama_boot_skipped"] = True
+            _log.info("[boot]     Skipping Ollama (prompt-only / SKIP_OLLAMA_BOOT=1)")
+        else:
+            st.session_state["ollama_boot_skipped"] = False
+            st.session_state["ollama_ready"] = ensure_ollama_running(OLLAMA_URL)
+    if st.session_state.get("ollama_boot_skipped"):
+        _set("Starting model runtime", 25, "Using prompt export path — local model runtime not required.")
+    elif st.session_state["ollama_ready"]:
         _set("Starting model runtime", 25, "Model runtime is ready.")
     else:
         notes.append(
@@ -182,16 +240,19 @@ def _run_boot_sequence() -> None:
         _set("Loading tickers and market data", 45)
         _t_warm = _time.perf_counter()
         _log.info("[warm-up]  Pre-loading market data for all tickers (2y)…")
+        _warm_results = None
         try:
             _warm_map = load_ticker_mapping(TICKERS_JSON)
             _warm_results = fetch_all_tickers(_warm_map, period=DEFAULT_YF_PERIOD)
-            _log.info("[warm-up]  Fetch done (%.1fs), indexing to Chroma…", _time.perf_counter() - _t_warm)
+            _log.info("[warm-up]  Fetch done (%.1fs)", _time.perf_counter() - _t_warm)
         except Exception as e:  # noqa: BLE001
             _log.error("[warm-up]  Fetch failed (%.1fs): %s", _time.perf_counter() - _t_warm, e)
-            warm_msgs.append(f"market fetch: {e}")
-        else:
+            warm_msgs.append(_warm_fetch_hint(str(e)))
+
+        if _warm_results is not None and st.session_state.get("ollama_ready"):
             st.session_state["boot_stage"] = "computing_rag"
             _set("Computing RAG context", 70)
+            _log.info("[warm-up]  Indexing to Chroma…")
             try:
                 _indexed, _idx_err = ingest_fetch_results(
                     _warm_results,
@@ -207,6 +268,10 @@ def _run_boot_sequence() -> None:
             except Exception as e:  # noqa: BLE001
                 _log.error("[warm-up]  RAG ingest failed: %s", e)
                 warm_msgs.append(f"RAG: {e}")
+        elif _warm_results is not None:
+            _set("Computing RAG context", 70, "Skipped — Ollama not used for this session.")
+            _log.info("[warm-up]  Skipping RAG indexing (Ollama not available / skipped at boot)")
+        if _warm_results is not None:
             _log.info("[warm-up]  Done (%.1fs)", _time.perf_counter() - _t_warm)
         st.session_state["yf_warm_done"] = True
 
@@ -297,69 +362,82 @@ if prompt:
     recent = prior[-4:] if prior else []
 
     assistant_text = ""
+    if not prompt_only and not st.session_state.get("ollama_ready"):
+        with st.spinner("Connecting to Ollama…"):
+            st.session_state["ollama_ready"] = ensure_ollama_running(OLLAMA_URL)
+        if not st.session_state["ollama_ready"]:
+            assistant_text = (
+                "**Ollama is not reachable.** Install from [ollama.com](https://ollama.com), "
+                "start the Ollama app, or turn on **Prompt-only mode** in the sidebar to use "
+                "export without a local model."
+            )
+
     with st.chat_message("assistant"):
-        try:
-            with st.status("Working on your question…", expanded=True) as status:
-                def on_step(label: str, detail: str) -> None:
-                    if label:
-                        status.update(label=_friendly_status_label(label))
-                    if detail:
-                        status.write(detail)
-
-                res = answer_question(
-                    prompt_text,
-                    period=DEFAULT_YF_PERIOD,
-                    tickers_json_path=None,
-                    model=ollama_model.strip() or None,
-                    ollama_base_url=OLLAMA_URL,
-                    embedding_model=config.OLLAMA_EMBED_MODEL,
-                    use_rag=USE_RAG,
-                    index_metrics_to_rag=INDEX_METRICS_TO_RAG,
-                    conversation_summary=st.session_state.conversation_summary,
-                    recent_messages=recent,
-                    prior_message_count=len(prior),
-                    step_callback=on_step,
-                    skip_llm=prompt_only,
-                )
-
-                total = res.timings.get("total", 0)
-                if res.error and not res.answer:
-                    status.update(label=f"Completed with errors ({total}s)", state="error")
-                else:
-                    status.update(label=f"Done in {total}s", state="complete", expanded=False)
-
-            st.session_state["qa_result"] = res
+        if assistant_text:
+            st.markdown(assistant_text)
+        else:
             try:
-                log_qa_result(
-                    prompt.strip(),
-                    res,
-                    period=DEFAULT_YF_PERIOD,
-                    use_rag=USE_RAG,
-                )
-            except Exception:
-                pass
-            if res.error and not res.answer:
-                assistant_text = f"**Could not complete the request.**\n\n{res.error}"
-            else:
-                assistant_text = res.answer or "_No text returned._"
-                if prompt_only and assistant_text == SKIP_LLM_PLACEHOLDER:
-                    assistant_text = (
-                        "**Prompt ready.** Open **Export to GPT** below, copy the "
-                        "Messages JSON or single prompt, then paste into ChatGPT."
+                with st.status("Working on your question…", expanded=True) as status:
+                    def on_step(label: str, detail: str) -> None:
+                        if label:
+                            status.update(label=_friendly_status_label(label))
+                        if detail:
+                            status.write(detail)
+
+                    res = answer_question(
+                        prompt_text,
+                        period=DEFAULT_YF_PERIOD,
+                        tickers_json_path=None,
+                        model=ollama_model.strip() or None,
+                        ollama_base_url=OLLAMA_URL,
+                        embedding_model=config.OLLAMA_EMBED_MODEL,
+                        use_rag=USE_RAG,
+                        index_metrics_to_rag=INDEX_METRICS_TO_RAG,
+                        conversation_summary=st.session_state.conversation_summary,
+                        recent_messages=recent,
+                        prior_message_count=len(prior),
+                        step_callback=on_step,
+                        skip_llm=prompt_only,
                     )
-                if res.symbols_used:
-                    assistant_text += f"\n\n---\n_Symbols with live data: {', '.join(res.symbols_used)}._"
-                if res.rag_error:
-                    assistant_text += f"\n\n_Note (retrieval): {res.rag_error}_"
-            st.markdown(assistant_text)
-        except Exception as e:  # noqa: BLE001
-            assistant_text = f"**Error:** {e}"
-            st.markdown(assistant_text)
+
+                    total = res.timings.get("total", 0)
+                    if res.error and not res.answer:
+                        status.update(label=f"Completed with errors ({total}s)", state="error")
+                    else:
+                        status.update(label=f"Done in {total}s", state="complete", expanded=False)
+
+                st.session_state["qa_result"] = res
+                try:
+                    log_qa_result(
+                        prompt.strip(),
+                        res,
+                        period=DEFAULT_YF_PERIOD,
+                        use_rag=USE_RAG,
+                    )
+                except Exception:
+                    pass
+                if res.error and not res.answer:
+                    assistant_text = f"**Could not complete the request.**\n\n{res.error}"
+                else:
+                    assistant_text = res.answer or "_No text returned._"
+                    if prompt_only and assistant_text == SKIP_LLM_PLACEHOLDER:
+                        assistant_text = (
+                            "**Prompt ready.** Open **Export to GPT** below, copy the "
+                            "Messages JSON or single prompt, then paste into ChatGPT."
+                        )
+                    if res.symbols_used:
+                        assistant_text += f"\n\n---\n_Symbols with live data: {', '.join(res.symbols_used)}._"
+                    if res.rag_error:
+                        assistant_text += f"\n\n_Note (retrieval): {res.rag_error}_"
+                st.markdown(assistant_text)
+            except Exception as e:  # noqa: BLE001
+                assistant_text = f"**Error:** {e}"
+                st.markdown(assistant_text)
 
     st.session_state.messages.append({"role": "assistant", "content": assistant_text})
 
     user_count = sum(1 for m in st.session_state.messages if m["role"] == "user")
-    if should_summarize(user_count) and not prompt_only:
+    if should_summarize(user_count) and not prompt_only and st.session_state.get("ollama_ready"):
         st.session_state.conversation_summary = build_summary(
             st.session_state.messages,
             previous_summary=st.session_state.conversation_summary,
