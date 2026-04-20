@@ -489,6 +489,15 @@ def main() -> None:
             subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--skip-update"])
             sys.exit(0)
 
+    if _is_frozen() and "--skip-update" not in sys.argv:
+        if os.environ.get("STOCK_ASSISTANT_DISABLE_UPDATE_CHECK", "").strip() != "1":
+            try:
+                from src.frozen_update_check import maybe_prompt_frozen_update
+
+                maybe_prompt_frozen_update()
+            except Exception:
+                _log.exception("Frozen update check failed")
+
     _kill_stale_on_port(_HOST, _PORT)
 
     proc = None

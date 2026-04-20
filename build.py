@@ -110,6 +110,7 @@ def _write_spec() -> None:
 
     datas = [
         (str(_ROOT / "some_tickers.json"), "."),
+        (str(_ROOT / "VERSION"), "."),
         (str(_ROOT / "requirements.txt"), "."),
         # Same icon as embedded .exe — beside launcher for desktop shortcuts (IconLocation)
         (str(_ROOT / "assets" / "icon.ico"), "."),

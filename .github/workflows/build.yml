@@ -44,18 +44,20 @@ jobs:
 
       - name: Zip release folder
         shell: pwsh
-        run: Compress-Archive -Path dist/StockAssistant/* -DestinationPath StockAssistant-${{ steps.version.outputs.ver }}-windows.zip
+        run: Compress-Archive -Path dist/StockAssistant/* -DestinationPath StockAssistant-windows.zip
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: Stock Assistant v${{ steps.version.outputs.ver }}
+          name: Stock Assistant
           body: |
             ## Download
 
-            1. Download **StockAssistant-${{ steps.version.outputs.ver }}-windows.zip** below.
+            1. Download **StockAssistant-windows.zip** below (same filename each release; use the tag and `BUILD_INFO.txt` inside the zip to identify the build).
             2. Extract the zip to any folder.
             3. Double-click **StockAssistant.exe** to launch.
 
             No Python installation required.
-          files: StockAssistant-${{ steps.version.outputs.ver }}-windows.zip
+
+            **This tag:** `${{ github.ref_name }}` — **VERSION** in the bundle matches the `VERSION` file at this commit.
+          files: StockAssistant-windows.zip

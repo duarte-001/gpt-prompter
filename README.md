@@ -89,7 +89,7 @@ python launcher.py --skip-update
 Pre-built Windows releases are available on GitHub:
 
 1. Go to [**Releases**](https://github.com/duarte-001/gpt-prompter/releases).
-2. Download the latest `StockAssistant-*-windows.zip`.
+2. Download the latest **`StockAssistant-windows.zip`** from Releases.
 3. Extract the zip to any folder.
 4. Double-click `StockAssistant.exe` to launch.
 
@@ -99,15 +99,31 @@ No Python, no terminal, no setup commands needed.
 
 When you want to publish a new `.exe` build:
 
+1. Bump **[VERSION](VERSION)** (this is what the frozen app reports as its build).
+2. After the release is public, bump **`update/manifest.json`** `version` on `main` to match (or exceed) the new release so older installed builds can prompt to open the download page.
+3. Commit, tag, push.
+
 ```powershell
-# 1. Bump the version in the VERSION file
-# 2. Commit and tag
-git add -A && git commit -m "release v1.0.0"
-git tag v1.0.0
+git add -A && git commit -m "release v1.0.1"
+git tag v1.0.1
 git push origin main --tags
 ```
 
 GitHub Actions builds the `.exe` automatically and publishes it as a release.
+
+### Optional update prompt (frozen `StockAssistant.exe`)
+
+On launch, the `.exe` fetches **`update/manifest.json`** (default: raw URL on `main`). If the manifest **`version`** is **greater** than the number in the bundled **`VERSION`** file, a dialog asks whether to open **`download_url`** in the browser. The dialog does not show version strings; numbers stay in `VERSION` / logs only.
+
+- Disable: env **`STOCK_ASSISTANT_DISABLE_UPDATE_CHECK=1`**, or run **`StockAssistant.exe --skip-update`**.
+- Custom manifest: **`STOCK_ASSISTANT_UPDATE_MANIFEST_URL`** (HTTPS JSON with `version`, `download_url`, optional `notes_url`).
+- “No” dismisses that manifest version until it changes (state under `%LOCALAPPDATA%\StockAssistant\`).
+
+**How to confirm it is working**
+
+1. **Silent success (already up to date):** Run the `.exe` with a **`VERSION`** that matches or exceeds `update/manifest.json` on GitHub. You should get **no** dialog; check `StockAssistant.log` next to the exe for lines like `Up to date` / no update errors.
+2. **Dialog path:** Temporarily set **`STOCK_ASSISTANT_UPDATE_MANIFEST_URL`** to a small JSON URL where `"version"` is higher than your bundled **`VERSION`** (e.g. a gist raw URL, or any static host). Run the `.exe` — you should see the **Stock Assistant — Update** prompt. **Yes** opens the URL; **No** dismisses for that manifest version.
+3. **Production path:** After you push a higher **`version`** in **`update/manifest.json`** on `main`, older installed builds (lower **`VERSION`**) should prompt on next launch (unless disabled or dismissed for that version).
 
 ## Building Locally (optional)
 
@@ -120,14 +136,16 @@ python build.py
 
 The output is `dist/StockAssistant/StockAssistant.exe`.
 
-**Note:** the `.exe` is a frozen snapshot. Auto-updates only work when running from the git checkout (`python launcher.py`), not from the `.exe`.
+**Note:** the `.exe` does not auto-install a new build. **Git-based** pull+pip only runs for `python launcher.py` from a checkout. The **frozen** app can only **prompt** and open the download page (see above).
 
 ## Architecture (High Level)
 
 - `launcher.py`
-  - Desktop entry point: checks for updates, starts Streamlit as a subprocess, and opens a native-feeling Edge/Chrome `--app` window.
+  - Desktop entry point: dev git pull (non-frozen), optional frozen manifest check, starts Streamlit, opens Edge/Chrome `--app` window.
 - `src/updater.py`
-  - Auto-update logic: fetches from origin, compares commits, prompts user, pulls and installs deps.
+  - Dev-only: git fetch/compare, prompt, `git pull` + `pip install`.
+- `src/frozen_update_check.py`
+  - Frozen `.exe`: HTTPS manifest vs bundled `VERSION`, optional “open download page” dialog.
 - `src/streamlit_app.py`
   - Main UI.
   - Runs warm-up fetch + optional indexing once per session.

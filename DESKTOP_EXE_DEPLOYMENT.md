@@ -33,9 +33,9 @@
 - **Symptom:** Local `dist\StockAssistant\` works; the zip from Releases does not.
 - **Typical causes:**
   - The **release zip was built from an older commit** (tag still pointed at old code while local tree had fixes).
-  - Reusing **`VERSION` = 1.0.0** and tag **`v1.0.0`** produces the **same zip name** every time → easy to download an **old** artifact by mistake.
+  - Releases ship **`StockAssistant-windows.zip`** (same filename each tag) — always check the **release tag** and **`BUILD_INFO.txt`** inside the zip (`github_sha`, run URL, `built_at`) so you know which build you have.
   - **Different machine** than the dev box (antivirus, "run inside zip" without extracting).
-- **Mitigation:** Push commits, **bump `VERSION`**, push a **new tag** (`v1.0.1`, …), confirm the **GitHub Actions** run succeeded. CI now drops **`BUILD_INFO.txt`** next to the exe (`github_sha`, run URL, `built_at`) so you can prove which build a zip came from.
+- **Mitigation:** Push commits, **bump `VERSION`**, push a **new tag** (`v1.0.1`, …), confirm the **GitHub Actions** run succeeded, then verify **`BUILD_INFO.txt`** matches the run you expect.
 
 ---
 
