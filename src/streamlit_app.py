@@ -6,6 +6,7 @@ Run: streamlit run src/streamlit_app.py
 
 from __future__ import annotations
 
+import base64
 import logging
 import os
 import json
@@ -32,11 +33,26 @@ if str(_ROOT) not in sys.path:
 _icon_png = _ROOT / "assets" / "icon.png"
 _icon_ico = _ROOT / "assets" / "icon.ico"
 _page_icon: str | None = None
-# Prefer the fast-loading small PNG for the browser tab (avoids default Streamlit icon flash).
 if _icon_png.exists():
     _page_icon = str(_icon_png.resolve())
 elif _icon_ico.exists():
     _page_icon = str(_icon_ico.resolve())
+
+
+def _favicon_data_uri(path: Path, mime: str = "image/png") -> str | None:
+    """Encode an icon file as a base64 data URI for inline <link> injection."""
+    if not path.exists():
+        return None
+    try:
+        raw = path.read_bytes()
+        b64 = base64.b64encode(raw).decode("ascii")
+        return f"data:{mime};base64,{b64}"
+    except OSError:
+        return None
+
+
+_favicon_png_uri = _favicon_data_uri(_icon_png)
+_favicon_ico_uri = _favicon_data_uri(_icon_ico, "image/x-icon")
 
 from src import config  # noqa: E402
 from src.config import (  # noqa: E402
@@ -135,6 +151,26 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+# Override Streamlit's single-size favicon with proper multi-size <link> tags so the
+# browser / app-mode window picks the sharpest match for its DPI instead of scaling.
+_fav_links: list[str] = []
+if _favicon_ico_uri:
+    _fav_links.append(f'<link rel="icon" type="image/x-icon" href="{_favicon_ico_uri}">')
+if _favicon_png_uri:
+    _fav_links.append(f'<link rel="icon" type="image/png" sizes="256x256" href="{_favicon_png_uri}">')
+    _fav_links.append(f'<link rel="apple-touch-icon" sizes="256x256" href="{_favicon_png_uri}">')
+if _fav_links:
+    _fav_js = "".join(_fav_links).replace('"', '\\"')
+    st.markdown(
+        f"""<script>
+        (function() {{
+            document.querySelectorAll('link[rel*="icon"]').forEach(function(el) {{ el.remove(); }});
+            document.head.insertAdjacentHTML('beforeend', "{_fav_js}");
+        }})();
+        </script>""",
+        unsafe_allow_html=True,
+    )
 
 if "boot_ready" not in st.session_state:
     st.session_state["boot_ready"] = False

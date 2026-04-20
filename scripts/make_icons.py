@@ -4,6 +4,26 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 
+# Every size the Windows shell may request across common DPI scales (100 %–250 %).
+# Largest first — first frame is the shell's preferred pick on modern Windows.
+ICO_SIZES = (256, 192, 128, 96, 72, 64, 48, 40, 32, 24, 20, 16)
+
+# Streamlit / browser favicon — 256 px keeps tabs sharp on 2× displays
+# while still being small enough to load fast.
+FAVICON_SIZE = 256
+
+
+def _render_frame(master: Image.Image, side: int) -> Image.Image:
+    """Downscale *master* to *side*×*side*, sharpening small frames."""
+    frame = master.resize((side, side), Image.Resampling.LANCZOS)
+    if side <= 72:
+        frame = frame.filter(
+            ImageFilter.UnsharpMask(radius=1.0, percent=200, threshold=2)
+        )
+    if side <= 32:
+        frame = ImageEnhance.Contrast(frame).enhance(1.10)
+    return frame
+
 
 def main() -> None:
     root = Path(__file__).resolve().parents[1]
@@ -13,10 +33,7 @@ def main() -> None:
     if not src_png.exists():
         raise FileNotFoundError(f"Missing source icon: {src_png}")
 
-    # Designer.png already has the desired glyph and background; we just need
-    # correct safe-area padding and proper ICO sizes for Windows.
     base = Image.open(src_png).convert("RGBA")
-    # Trim transparent borders if any (usually none), then contain.
     bbox = base.getbbox()
     if bbox:
         base = base.crop(bbox)
@@ -24,12 +41,10 @@ def main() -> None:
     # Build a clean brand background (squircle + subtle radial gradient).
     size = 1024
     bg = Image.new("RGBA", (size, size), (15, 23, 42, 255))  # #0F172A
-    # Cheap radial gradient: draw on small canvas then upscale.
     gsz = 256
     grad = Image.new("RGBA", (gsz, gsz), (0, 0, 0, 0))
     gd = ImageDraw.Draw(grad)
     for i in range(gsz // 2, 0, -1):
-        # center highlight toward #111C33
         t = i / (gsz / 2)
         col = (
             int(17 + (15 - 17) * t),
@@ -51,7 +66,6 @@ def main() -> None:
     bg_masked = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     bg_masked.paste(bg, (0, 0), mask)
 
-    # Place the Designer mark with generous padding (Spotify-like weight).
     art_target = int(size * 0.62)
     art = ImageOps.contain(base, (art_target, art_target), method=Image.Resampling.LANCZOS)
     x = (size - art.width) // 2
@@ -59,34 +73,30 @@ def main() -> None:
     out = bg_masked.copy()
     out.alpha_composite(art, (x, y))
 
+    # --- Master 1024 ---
     master_out = assets / "icon_master_1024.png"
     out.save(master_out)
 
-    # Streamlit favicon: keep it small to avoid the default Streamlit logo flash.
-    # 128x128 loads quickly but still looks sharp in the tab.
-    out.resize((128, 128), Image.Resampling.LANCZOS).save(assets / "icon.png")
+    # --- Streamlit / browser favicon (256 px) ---
+    favicon = _render_frame(out, FAVICON_SIZE)
+    favicon.save(assets / "icon.png")
 
-    # Windows exe/shortcut/taskbar: multi-resolution ICO.
-    ico_sizes = [(256, 256), (128, 128), (64, 64), (48, 48), (32, 32), (24, 24), (16, 16)]
+    # --- Windows multi-resolution ICO ---
     ico_path = assets / "icon.ico"
-    # Pillow's automatic downscale can look soft at 16–32px, so we pre-render and sharpen each size.
-    frames: list[Image.Image] = []
-    for w, h in ico_sizes:
-        im_sz = out.resize((w, h), Image.Resampling.LANCZOS)
-        if w <= 64:
-            im_sz = im_sz.filter(ImageFilter.UnsharpMask(radius=1.2, percent=190, threshold=2))
-        if w <= 32:
-            im_sz = ImageEnhance.Contrast(im_sz).enhance(1.08)
-        frames.append(im_sz)
-    frames[0].save(ico_path, format="ICO", append_images=frames[1:])
+    frames = [_render_frame(out, s) for s in ICO_SIZES]
+    frames[0].save(
+        ico_path,
+        format="ICO",
+        sizes=[(f.width, f.height) for f in frames],
+        append_images=frames[1:],
+    )
 
-    # Verify frames/sizes (best-effort; Pillow reports size per frame).
     ico = Image.open(ico_path)
-    sizes = ico.info.get("sizes", [])
+    reported = sorted(ico.info.get("sizes", []))
     print("Wrote:", master_out)
-    print("Overwrote:", assets / "icon.png")
+    print("Overwrote:", assets / "icon.png", f"({FAVICON_SIZE}×{FAVICON_SIZE})")
     print("Wrote:", ico_path)
-    print("ICO sizes:", sizes)
+    print("ICO sizes:", reported)
 
 
 if __name__ == "__main__":
