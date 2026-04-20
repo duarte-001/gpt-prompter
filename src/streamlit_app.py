@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import json
+import re
 import sys
 import time as _time
 from pathlib import Path
@@ -31,6 +32,7 @@ if str(_ROOT) not in sys.path:
 _icon_png = _ROOT / "assets" / "icon.png"
 _icon_ico = _ROOT / "assets" / "icon.ico"
 _page_icon: str | None = None
+# Prefer the fast-loading small PNG for the browser tab (avoids default Streamlit icon flash).
 if _icon_png.exists():
     _page_icon = str(_icon_png.resolve())
 elif _icon_ico.exists():
@@ -58,9 +60,15 @@ from src.rag import ingest_fetch_results  # noqa: E402
 _log = logging.getLogger("stock_qa")
 
 OLLAMA_URL = os.environ.get("OLLAMA_BASE_URL", config.OLLAMA_BASE_URL).strip()
+BRAND_PRIMARY = "#3B82F6"
+BRAND_ACCENT = "#22D3EE"
+BRAND_TEXT = "#E5E7EB"
+BRAND_SURFACE = "#111C33"
+BRAND_BORDER = "#1E293B"
+BRAND_DANGER = "#F87171"
 
 _page_cfg: dict = {
-    "page_title": "Stock assistant",
+    "page_title": "Stock Assistant",
     "layout": "wide",
     "initial_sidebar_state": "collapsed",
 }
@@ -69,33 +77,111 @@ if _page_icon:
 st.set_page_config(**_page_cfg)
 
 st.markdown(
-    """
+    f"""
     <style>
-    .stApp a:link, .stApp a:visited { color: #3B82F6 !important; }
-    .stApp a:hover { color: #22D3EE !important; }
+    .stApp a:link, .stApp a:visited {{ color: #3B82F6 !important; }}
+    .stApp a:hover {{ color: #22D3EE !important; }}
+    .welcome-card {{
+      border: 1px solid #1E293B;
+      border-radius: 12px;
+      padding: 0.9rem 1rem;
+      background: #111C33;
+      margin-bottom: 0.5rem;
+    }}
+    .welcome-card ul {{
+      margin: 0.35rem 0 0.25rem 1rem;
+      padding: 0;
+    }}
+
+    /* Chat avatars / icons (Streamlit chrome) */
+    div[data-testid="stChatMessageAvatar"] {{
+      background-color: {BRAND_SURFACE} !important;
+      border: 1px solid {BRAND_BORDER} !important;
+    }}
+    /* Streamlit sets the colored badge on an inner div; override that too. */
+    div[data-testid="stChatMessageAvatar"] > div {{
+      background-color: {BRAND_SURFACE} !important;
+      border: 1px solid {BRAND_BORDER} !important;
+    }}
+    /* Streamlit uses different SVGs/strategies (fill vs stroke vs currentColor) per role. */
+    div[data-testid="stChatMessageAvatar"] svg,
+    div[data-testid="stChatMessageAvatar"] svg * {{
+      color: {BRAND_ACCENT} !important;
+      fill: {BRAND_ACCENT} !important;
+      stroke: {BRAND_ACCENT} !important;
+    }}
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# Start Ollama once per session (same as original app).
-if "ollama_ready" not in st.session_state:
-    with st.spinner("Starting Ollama…"):
-        st.session_state["ollama_ready"] = ensure_ollama_running(OLLAMA_URL)
-    if not st.session_state["ollama_ready"]:
-        st.warning(
-            "Ollama is not reachable and could not be started automatically. "
-            "Install it from https://ollama.com or run `ollama serve` in a terminal, then refresh this page."
-        )
+if "boot_ready" not in st.session_state:
+    st.session_state["boot_ready"] = False
+if "boot_stage" not in st.session_state:
+    st.session_state["boot_stage"] = "init"
+if "boot_started_at" not in st.session_state:
+    st.session_state["boot_started_at"] = _time.perf_counter()
+if "boot_notes" not in st.session_state:
+    st.session_state["boot_notes"] = []
 
-# One-time warm-up: fetch + index (original behaviour; robust errors like current main).
-if os.environ.get("SKIP_YF_WARM") == "1":
-    st.session_state["yf_warm_done"] = True
-elif "yf_warm_done" not in st.session_state:
-    with st.spinner("Pre-loading market data and indexing for RAG (once per session)…"):
+
+def _render_welcome_boot() -> None:
+    st.title("Stock Assistant")
+    st.caption(
+        "Intelligent prompt-generation for financial reasoning, grounded in reliable live data and retrieval."
+    )
+    st.markdown(
+        """
+        <div class="welcome-card">
+          <strong>Preparing your workspace</strong>
+          <ul>
+            <li>Loading tickers and market data</li>
+            <li>Computing retrieval context (RAG)</li>
+            <li>Preparing prompt generator</li>
+          </ul>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.caption("Not financial advice.")
+
+
+def _run_boot_sequence() -> None:
+    notes: list[str] = []
+    warm_msgs: list[str] = []
+    # Keep boot UI non-interactive (no expanders/clickable status panels).
+    progress = st.progress(0)
+    label = st.empty()
+    details = st.empty()
+
+    def _set(step: str, pct: int, detail: str | None = None) -> None:
+        label.markdown(f"**{step}…**")
+        progress.progress(max(0, min(100, pct)))
+        if detail:
+            details.caption(detail)
+
+    st.session_state["boot_stage"] = "starting_ollama"
+    _set("Starting model runtime", 15)
+    if "ollama_ready" not in st.session_state:
+        st.session_state["ollama_ready"] = ensure_ollama_running(OLLAMA_URL)
+    if st.session_state["ollama_ready"]:
+        _set("Starting model runtime", 25, "Model runtime is ready.")
+    else:
+        notes.append(
+            "Ollama is not reachable and could not be started automatically. "
+            "Install it from https://ollama.com or run `ollama serve` in a terminal."
+        )
+        _set("Starting model runtime", 25, "Model runtime is not reachable. You can still use prompt export mode.")
+
+    # Warm-up scope for the welcome page: ticker universe load + RAG computation/index.
+    if os.environ.get("SKIP_YF_WARM") == "1":
+        st.session_state["yf_warm_done"] = True
+        _set("Warm-up", 35, "Warm-up skipped by environment setting.")
+    elif "yf_warm_done" not in st.session_state:
+        st.session_state["boot_stage"] = "loading_tickers"
+        _set("Loading tickers and market data", 45)
         _t_warm = _time.perf_counter()
         _log.info("[warm-up]  Pre-loading market data for all tickers (2y)…")
-        warm_msgs: list[str] = []
         try:
             _warm_map = load_ticker_mapping(TICKERS_JSON)
             _warm_results = fetch_all_tickers(_warm_map, period=DEFAULT_YF_PERIOD)
@@ -104,6 +190,8 @@ elif "yf_warm_done" not in st.session_state:
             _log.error("[warm-up]  Fetch failed (%.1fs): %s", _time.perf_counter() - _t_warm, e)
             warm_msgs.append(f"market fetch: {e}")
         else:
+            st.session_state["boot_stage"] = "computing_rag"
+            _set("Computing RAG context", 70)
             try:
                 _indexed, _idx_err = ingest_fetch_results(
                     _warm_results,
@@ -120,9 +208,25 @@ elif "yf_warm_done" not in st.session_state:
                 _log.error("[warm-up]  RAG ingest failed: %s", e)
                 warm_msgs.append(f"RAG: {e}")
             _log.info("[warm-up]  Done (%.1fs)", _time.perf_counter() - _t_warm)
-        if warm_msgs:
-            st.session_state["yf_warm_error"] = "; ".join(warm_msgs)
-    st.session_state["yf_warm_done"] = True
+        st.session_state["yf_warm_done"] = True
+
+    if warm_msgs:
+        st.session_state["yf_warm_error"] = "; ".join(warm_msgs)
+    st.session_state["boot_notes"] = notes
+    st.session_state["boot_stage"] = "ready"
+    st.session_state["boot_ready"] = True
+    _set("Workspace ready", 100)
+
+
+if not st.session_state["boot_ready"]:
+    _render_welcome_boot()
+    _run_boot_sequence()
+    st.rerun()
+    st.stop()
+
+if boot_notes := st.session_state.get("boot_notes"):
+    st.warning("Startup note: " + " ".join(boot_notes))
+    st.session_state["boot_notes"] = []
 
 if err := st.session_state.get("yf_warm_error"):
     st.warning(
@@ -144,7 +248,7 @@ with st.sidebar:
         help="Chat model, e.g. llama3.2",
     )
     prompt_only = st.checkbox(
-        "Prompt generator (skip local answer)",
+        "Prompt-only mode (skip local answer)",
         value=os.environ.get("PROMPT_ONLY", "1").strip() == "1",
         help="Fetch + RAG only; no Ollama chat. Fastest path to **Export to GPT**.",
     )
@@ -154,32 +258,40 @@ INDEX_METRICS_TO_RAG = os.environ.get("INDEX_RAG_EACH_ASK", "0").strip() == "1"
 
 c1, c2 = st.columns([4, 1])
 with c1:
-    st.title("Stock assistant")
+    st.title("Stock Assistant")
 with c2:
-    if st.button("Clear chat", use_container_width=True):
+    if st.button("Clear chat", use_container_width=True, type="secondary"):
         st.session_state.messages = []
         st.session_state.pop("qa_result", None)
         st.session_state.conversation_summary = ""
         st.rerun()
 
-st.caption(
-    "Ask in plain language. The app uses **live Yahoo Finance metrics** and **Chroma RAG** "
-    f"({DEFAULT_YF_PERIOD} window; cache ~1h). Sidebar: **Prompt generator** skips the local LLM "
-    "and only builds data for **Export to GPT**. "
-    "If **Ollama never uses your GPU** (CPU-only, very slow), run `python -m src.diagnose_gpu` in a terminal. "
-    "Not financial advice."
-)
+st.caption("Ask in plain language for a clear, data-grounded market read. Not financial advice.")
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-if prompt := st.chat_input(
-    placeholder="Ask about a stock — e.g. Is it a good time to look at NVDA? What should I watch?",
-):
-    st.session_state.messages.append({"role": "user", "content": prompt})
+
+def _friendly_status_label(label: str) -> str:
+    raw = (label or "").strip()
+    low = raw.lower()
+    if "fetch" in low or "market" in low:
+        return "Fetching live market data"
+    if "rag" in low or "retriev" in low or "index" in low:
+        return "Preparing retrieval context"
+    if "llm" in low or "answer" in low or "draft" in low:
+        return "Drafting your answer"
+    return raw or "Processing your question"
+
+
+prompt = st.chat_input(placeholder="Ask your question.")
+if prompt:
+    prompt_text = prompt.strip()
+
+    st.session_state.messages.append({"role": "user", "content": prompt_text})
     with st.chat_message("user"):
-        st.markdown(prompt)
+        st.markdown(prompt_text)
 
     prior = st.session_state.messages[:-1]
     recent = prior[-4:] if prior else []
@@ -187,15 +299,15 @@ if prompt := st.chat_input(
     assistant_text = ""
     with st.chat_message("assistant"):
         try:
-            with st.status("Processing your question…", expanded=True) as status:
+            with st.status("Working on your question…", expanded=True) as status:
                 def on_step(label: str, detail: str) -> None:
                     if label:
-                        status.update(label=label)
+                        status.update(label=_friendly_status_label(label))
                     if detail:
                         status.write(detail)
 
                 res = answer_question(
-                    prompt.strip(),
+                    prompt_text,
                     period=DEFAULT_YF_PERIOD,
                     tickers_json_path=None,
                     model=ollama_model.strip() or None,
@@ -261,9 +373,12 @@ with st.expander("Technical details (last reply)", expanded=False):
     if st.session_state.get("qa_result"):
         res = st.session_state["qa_result"]
         if res.timings:
-            cols = st.columns(len(res.timings))
-            for col, (step_name, secs) in zip(cols, res.timings.items()):
-                col.metric(step_name, f"{secs}s")
+            timing_items = list(res.timings.items())
+            max_cols = 3
+            for start in range(0, len(timing_items), max_cols):
+                cols = st.columns(max_cols)
+                for col, (step_name, secs) in zip(cols, timing_items[start : start + max_cols]):
+                    col.metric(step_name, f"{secs}s")
         if res.rag_context:
             st.text_area("RAG context", res.rag_context, height=120)
         st.code(res.context_json[:12000] + ("…" if len(res.context_json) > 12000 else ""), language="json")
@@ -333,11 +448,12 @@ def _render_copy_gpt_prompt_button(prompt_text: str) -> None:
         f"""
         <div>
           <button id="gpt-copy-btn" type="button"
-            style="padding:0.45rem 1rem; border-radius:6px; cursor:pointer;
-            font-family:system-ui,sans-serif; font-size:14px;">
+            style="padding:0.45rem 1rem; border-radius:8px; cursor:pointer;
+            font-family:system-ui,sans-serif; font-size:14px; color:{BRAND_TEXT};
+            background:{BRAND_SURFACE}; border:1px solid {BRAND_BORDER};">
             Copy GPT prompt
           </button>
-          <span id="gpt-copy-feedback" style="margin-left:10px; color:#2e7d32; font-size:13px;"></span>
+          <span id="gpt-copy-feedback" style="margin-left:10px; color:{BRAND_PRIMARY}; font-size:13px;"></span>
           <script>
             const txt = {js_str};
             const btn = document.getElementById("gpt-copy-btn");
@@ -345,11 +461,11 @@ def _render_copy_gpt_prompt_button(prompt_text: str) -> None:
             btn.addEventListener("click", () => {{
               navigator.clipboard.writeText(txt).then(() => {{
                 fb.textContent = "Copied!";
-                fb.style.color = "#2e7d32";
+                fb.style.color = "{BRAND_ACCENT}";
                 setTimeout(() => {{ fb.textContent = ""; }}, 2500);
               }}).catch(() => {{
                 fb.textContent = "Copy failed — select the text in the box above.";
-                fb.style.color = "#c62828";
+                fb.style.color = "{BRAND_DANGER}";
               }});
             }});
           </script>
