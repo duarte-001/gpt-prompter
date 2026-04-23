@@ -24,10 +24,10 @@ def _append_line(path: Path, line: str) -> None:
 
 
 def _is_embedded_streamlit_worker() -> bool:
-    return len(sys.argv) > 1 and sys.argv[1] == "--streamlit-worker"
+    return False
 
 
-if getattr(sys, "frozen", False) and not _is_embedded_streamlit_worker():
+if getattr(sys, "frozen", False):
     exe = Path(sys.executable).resolve()
     stamp = (
         f"{time.strftime('%Y-%m-%d %H:%M:%S')} pyi_rth_boot pid={os.getpid()} "

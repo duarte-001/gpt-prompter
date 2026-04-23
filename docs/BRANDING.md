@@ -2,8 +2,7 @@
 
 This document defines how the product should look and sound in marketing and in the UI.
 
-- **Legacy UI:** Streamlit (`src/streamlit_app.py`) + `.streamlit/config.toml`
-- **Current UI:** React (`frontend/`) served by FastAPI (`src/api/app.py`)
+- **UI:** React (`frontend/`) served by FastAPI (`src/api/app.py`)
 
 ## Positioning
 
@@ -11,13 +10,11 @@ This document defines how the product should look and sound in marketing and in 
 
 **Technical one-liner (README, decks, specs):** An intelligent prompt-generation system that maximizes LLM capabilities for financial reasoning—grounded on reliable data, efficient retrieval, and professional-grade outputs.
 
-**UI principles (applies to Streamlit + React):**
+**UI principles:**
 - **Chat-first**: the assistant message is the source of truth for success/failure (“fetched live data…”, “no tickers found…”, “retrieval unavailable…”).
 - **Export-first**: the user’s primary action is **Copy entire prompt** (no scrolling required; keep the copy CTA close to the composer).
 - **Prompt-only default**: keep the app fast; local answering is an optional mode for power users.
 - **Dev details gated**: technical logs are visible only in **Dev mode**.
-
-**Legacy Streamlit UI (`streamlit_app.py`):** Sidebar controls; chat; technical expander; “Export to GPT” with preview + copy; warm-up spinners.
 
 **Current React UI (`frontend/`):** Single-turn chat experience; horizontal settings bar; sticky export action; Dev mode renders compact “technical cards” (steps, timings, retrieval hits, payload preview).
 
@@ -90,19 +87,6 @@ Option A is intentionally restrained, but the React UI can feel flat if base/sur
 **Technical mapping (for README “how it works”, engineers, prompts):** structured JSON user turns; system hierarchy (live Yahoo metrics vs Chroma RAG vs chat); session warm-up indexing; **Export to GPT** payload; optional **Ollama**; prompt-only mode.
 
 **Disclaimer (always visible where appropriate):** not financial advice.
-
-## Streamlit constraints (what we own vs accept)
-
-Streamlit is not a full design system. We align what we can and avoid fighting the framework.
-
-| Layer | What we control |
-|--------|------------------|
-| **Theme** | `[theme]` in `.streamlit/config.toml`: base, surface, primary, text — matches the table above. |
-| **Accent** | Streamlit has no separate “accent” token; cyan is applied via **small custom CSS** (e.g. link hover) and intentional markdown/HTML where needed. |
-| **Layout** | Columns, expanders, chat — good for “structured analytical”; bespoke dashboards need more CSS or custom components. |
-| **Widgets** | Most inputs pick up theme colours; some third-party or internal chrome may not match perfectly — acceptable if overall chrome matches Option A. |
-
-When adding new UI, default to **theme tokens** first; introduce **cyan** only for deliberate emphasis.
 
 ## React UI constraints (what we own vs accept)
 

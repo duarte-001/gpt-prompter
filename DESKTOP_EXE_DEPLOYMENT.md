@@ -41,10 +41,10 @@
 
 ## How the UI window works now
 
-1. `launcher.py` starts Streamlit in a child process (`--streamlit-worker`).
-2. Once Streamlit is listening, it looks for **`msedge.exe`** or **`chrome.exe`** in standard install paths.
-3. Launches the browser in **`--app=http://127.0.0.1:8501`** mode — a chromeless window.
-4. Waits for the browser window to close, then kills Streamlit and exits.
+1. `launcher.py` starts the FastAPI server (serving the React UI).
+2. Once the server is listening, it looks for **`msedge.exe`** or **`chrome.exe`** in standard install paths.
+3. Launches the browser in **`--app=http://127.0.0.1:8787/`** mode — a chromeless window.
+4. Waits for the browser window to close, then shuts down the server and exits.
 5. If no Edge/Chrome is found, falls back to the **default browser** (`webbrowser.open`).
 
 No .NET, no pythonnet, no CLR, no pywebview.
@@ -62,6 +62,6 @@ No .NET, no pythonnet, no CLR, no pywebview.
 
 ## References in this repo
 
-- Entry: `launcher.py` (Edge/Chrome `--app` mode parent, `--streamlit-worker` child, logging, fallbacks).
-- Bundle: `build.py` / generated `StockAssistant.spec` (PyInstaller, `collect_all` for Streamlit, optional `python build.py --debug` for a console).
+- Entry: `launcher.py` (starts FastAPI, opens Edge/Chrome `--app` window, logging, fallbacks).
+- Bundle: `build.py` / generated `StockAssistant.spec` (PyInstaller, optional `python build.py --debug` for a console).
 - CI: `.github/workflows/build.yml` (tag-triggered build, zip, `BUILD_INFO.txt`).

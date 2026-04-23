@@ -1,6 +1,6 @@
 # Stock Assistant
 
-**Positioning:** an intelligent prompt-generation system that maximizes LLM capabilities for financial reasoning—grounded on reliable data, efficient retrieval, and professional-grade outputs. The **Streamlit UI** leads with plain-language copy; this README keeps technical detail for developers.
+**Positioning:** an intelligent prompt-generation system that maximizes LLM capabilities for financial reasoning—grounded on reliable data, efficient retrieval, and professional-grade outputs. The app ships as a **React UI served by a FastAPI backend**, with one-click prompt export to paste into ChatGPT.
 
 Ships as a deterministic pipeline plus UI: optional local **Ollama** answers, or prompt-only mode with **Export to GPT** for ChatGPT and similar models.
 
@@ -22,7 +22,7 @@ This repo is designed to work well as a **single-machine prompt generator**. For
 
 This repository is currently optimized for **prompt generation + external GPT final answer**:
 
-1. Ask a question in the Streamlit app.
+1. Ask a question in the app.
 2. Pipeline resolves symbols/sectors and fetches live metrics.
 3. Pipeline builds structured user content with authoritative `live_market_data`.
 4. Scroll to **Export to GPT (last reply)** → **Copy GPT prompt** → paste into ChatGPT.
@@ -76,7 +76,7 @@ This app is intentionally multi-step. Each step reduces ambiguity before the fin
   - RAG adds qualitative background,
   - GPT handles final reasoning and writing style.
 
-Timings and live JSON for the last reply are under **Technical details (last reply)** in the Streamlit app.
+Timings and live JSON for the last reply are visible in **Dev mode** in the React UI.
 
 ## Auto-Updates
 
@@ -150,11 +150,8 @@ The output is `dist/StockAssistant/StockAssistant.exe`.
   - Dev-only: git fetch/compare, prompt, `git pull` + `pip install`.
 - `src/frozen_update_check.py`
   - Frozen `.exe`: HTTPS manifest vs bundled `VERSION`, optional “open download page” dialog.
-- `src/streamlit_app.py`
-  - Main UI.
-  - Runs warm-up fetch + optional indexing once per session.
-  - Calls `answer_question(...)`.
-  - Exports the exact built prompt to clipboard.
+- React UI (`frontend/`) served by FastAPI (`src/api/app.py`)
+  - Chat-first prompt generator, export-first workflow, optional dev details.
 - `src/pipeline.py`
   - Core orchestration:
     - deterministic symbol matching
@@ -211,22 +208,20 @@ ollama pull nomic-embed-text
 
 ### Desktop app (recommended)
 
-Launches the Streamlit backend and opens it in a chromeless Edge/Chrome window (looks like a native app — no address bar, no tabs). Install deps first:
+Launches the FastAPI backend (serving the React UI) and opens it in a chromeless Edge/Chrome window (looks like a native app — no address bar, no tabs). Install deps first:
 
 ```powershell
 pip install -r requirements.txt
 python launcher.py
 ```
 
-### Browser mode
-
-If you prefer the classic browser experience:
+### Dev server (browser)
 
 ```powershell
-streamlit run src/streamlit_app.py
+python -m src.api.server
 ```
 
-Open the local URL shown by Streamlit.
+Open `http://127.0.0.1:8787/`.
 
 ## Environment Flags
 

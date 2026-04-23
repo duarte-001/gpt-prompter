@@ -1,6 +1,7 @@
 """
-Desktop launcher: checks for updates, then runs the Streamlit app inside
-a native-feeling window (Edge/Chrome --app mode) or the default browser.
+Desktop launcher: checks for updates, then runs the FastAPI server (which serves
+the React frontend) and opens a native-feeling window (Edge/Chrome --app mode)
+or the default browser.
 
 Usage:  python launcher.py
         python launcher.py --skip-update
@@ -30,16 +31,11 @@ def _get_root() -> Path:
 
 
 _ROOT = _get_root()
-_STREAMLIT_SCRIPT = _ROOT / "src" / "streamlit_app.py"
 
 _HOST = "127.0.0.1"
-_STREAMLIT_PORT = 8501
 _API_PORT = 8787
 # Health checks and server wait use the origin only.
-_STREAMLIT_SERVER_BASE_URL = f"http://{_HOST}:{_STREAMLIT_PORT}"
 _API_SERVER_BASE_URL = f"http://{_HOST}:{_API_PORT}"
-# Streamlit 1.5x may return 404 on ``/`` while the app UI lives under ``/app`` (esp. frozen bundles).
-_STREAMLIT_BROWSER_APP_URL = f"{_STREAMLIT_SERVER_BASE_URL}/app"
 _API_BROWSER_APP_URL = f"{_API_SERVER_BASE_URL}/"
 _STARTUP_TIMEOUT = 60
 
@@ -132,28 +128,15 @@ def _setup_logging() -> None:
 
 
 def _server_ready(url: str) -> bool:
-    """Return True when Streamlit health responds, with fallback to root HTTP reachability."""
+    """Return True when FastAPI health responds, with fallback to root HTTP reachability."""
     from urllib.request import urlopen
     from urllib.error import HTTPError, URLError
 
-    # FastAPI health: prefer /api/health when present.
     api_health = f"{url.rstrip('/')}/api/health"
     try:
         with urlopen(api_health, timeout=2) as resp:
             return 200 <= resp.status < 500
     except (HTTPError, URLError, OSError, ValueError):
-        pass
-
-    health_url = f"{url.rstrip('/')}/_stcore/health"
-    try:
-        with urlopen(health_url, timeout=2) as resp:
-            return resp.status == 200
-    except HTTPError as exc:
-        # Some deployments may block this endpoint, but a non-5xx code
-        # still proves the Streamlit HTTP server is up.
-        if exc.code < 500:
-            return True
-    except (URLError, OSError, ValueError):
         pass
 
     try:
@@ -398,109 +381,12 @@ def _open_url_with_installed_browser(url: str) -> None:
 def _open_browser_fallback(reason: str = "") -> None:
     """Open in Chrome/Edge when possible, else the default browser (no blocking dialog)."""
     _log.info("Opening in default browser. Reason: %s", reason)
-    url = _API_BROWSER_APP_URL if _ui_mode() == "react" else _STREAMLIT_BROWSER_APP_URL
-    _open_url_with_installed_browser(url)
+    _open_url_with_installed_browser(_API_BROWSER_APP_URL)
 
-
-# ---------------------------------------------------------------------------
-# Streamlit launch strategies
-# ---------------------------------------------------------------------------
-
-def _start_streamlit_subprocess() -> subprocess.Popen:
-    """Launch Streamlit as a child process (used when running from source)."""
-    streamlit_cmd = [
-        sys.executable, "-m", "streamlit", "run",
-        str(_STREAMLIT_SCRIPT),
-        "--server.headless=true",
-        f"--server.port={_STREAMLIT_PORT}",
-        f"--server.address={_HOST}",
-        "--global.developmentMode=false",
-    ]
-
-    return subprocess.Popen(
-        streamlit_cmd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        cwd=str(_ROOT),
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-
-
-def _apply_streamlit_env() -> None:
-    os.environ["STREAMLIT_SERVER_HEADLESS"] = "true"
-    os.environ["STREAMLIT_SERVER_PORT"] = str(_STREAMLIT_PORT)
-    os.environ["STREAMLIT_SERVER_ADDRESS"] = _HOST
-    os.environ["STREAMLIT_GLOBAL_DEVELOPMENT_MODE"] = "false"
-
-
-def _streamlit_flag_options() -> dict:
-    return {
-        "server.headless": True,
-        "server.port": _STREAMLIT_PORT,
-        "server.address": _HOST,
-        "global.developmentMode": False,
-    }
-
-
-def _streamlit_worker_entry() -> None:
-    """Second process: Streamlit bootstrap on the real main thread (signal handlers work)."""
-    _apply_streamlit_env()
-    # PyInstaller puts ``.streamlit/config.toml`` under ``_MEIPASS``; the worker's cwd was the
-    # folder next to the .exe, so Streamlit never saw the theme file (light/white UI).
-    if getattr(sys, "frozen", False):
-        os.chdir(sys._MEIPASS)
-    _log.info("streamlit-worker: importing bootstrap …")
-    # Mirror ``streamlit run``: apply flag_options before ``bootstrap.run``.
-    # Without this, frozen installs keep Streamlit's default ``global.developmentMode=true``
-    # (no ``site-packages`` in paths), which binds the UI to the Vite port (3000), breaks
-    # ``/`` on 8501, and can trigger ``webbrowser.open`` → Edge on Windows.
-    import streamlit.config as st_config
-    from streamlit.web.bootstrap import load_config_options, run as st_run
-
-    script_abs = os.path.abspath(str(_STREAMLIT_SCRIPT))
-    st_config._main_script_path = script_abs
-    flags = _streamlit_flag_options()
-    load_config_options(flags)
-    st_run(script_abs, False, [], flags)
-
-
-def _worker_log_path() -> Path:
-    return _win_local_appdata_dir() / "streamlit_worker.log" if sys.platform == "win32" else _frozen_fallback_log().with_name("streamlit_worker.log")
-
-
-def _start_streamlit_frozen_worker() -> subprocess.Popen:
-    """Re-launch same .exe with --streamlit-worker (Streamlit cannot run in a daemon thread)."""
-    _apply_streamlit_env()
-    _log.info(
-        "Starting embedded Streamlit server (helper process, same app — not a second launch) …"
-    )
-    wlog = _worker_log_path()
-    wlog.parent.mkdir(parents=True, exist_ok=True)
-    wlog_fh = open(wlog, "w", encoding="utf-8")
-    proc = subprocess.Popen(
-        [sys.executable, "--streamlit-worker"],
-        cwd=str(Path(sys.executable).resolve().parent),
-        stdout=wlog_fh,
-        stderr=subprocess.STDOUT,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    _log.info("Worker log: %s", wlog)
-    return proc
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 def _ui_mode() -> str:
-    """
-    Select which UI the desktop launcher opens.
-
-    - Default: React UI served by FastAPI (the new frontend path)
-    - Override: STOCK_ASSISTANT_UI=streamlit
-    """
-    raw = os.environ.get("STOCK_ASSISTANT_UI", "react").strip().lower()
-    return "streamlit" if raw in ("streamlit", "st") else "react"
+    """Legacy compatibility shim (always react now)."""
+    return "react"
 
 
 def _start_fastapi_server_thread(host: str, port: int) -> tuple[threading.Thread, object]:
@@ -552,50 +438,18 @@ def main() -> None:
             except Exception:
                 _log.exception("Frozen update check failed")
 
-    # Avoid “port already in use” after crashes / force-kill.
-    if _ui_mode() == "react":
-        _kill_stale_on_port(_HOST, _API_PORT)
-    else:
-        _kill_stale_on_port(_HOST, _STREAMLIT_PORT)
+    _kill_stale_on_port(_HOST, _API_PORT)
 
     proc = None
     api_server = None
-    if _ui_mode() == "react":
-        # Run FastAPI in-process (works for frozen builds; no need to spawn a Python worker).
-        _log.info("Starting FastAPI + React UI on %s:%d", _HOST, _API_PORT)
-        _, api_server = _start_fastapi_server_thread(_HOST, _API_PORT)
-        atexit.register(lambda: setattr(api_server, "should_exit", True))
-    else:
-        # Legacy Streamlit path (kept for compatibility).
-        if _is_frozen():
-            try:
-                proc = _start_streamlit_frozen_worker()
-                atexit.register(_kill_proc, proc)
-            except Exception:
-                _log.error("Streamlit worker failed to start:\n%s", traceback.format_exc())
-                _open_browser_fallback(reason="Streamlit worker failed")
-                return
-        else:
-            proc = _start_streamlit_subprocess()
-            atexit.register(_kill_proc, proc)
+    _log.info("Starting FastAPI + React UI on %s:%d", _HOST, _API_PORT)
+    _, api_server = _start_fastapi_server_thread(_HOST, _API_PORT)
+    atexit.register(lambda: setattr(api_server, "should_exit", True))
 
     signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
 
-    base_url = _API_SERVER_BASE_URL if _ui_mode() == "react" else _STREAMLIT_SERVER_BASE_URL
-    if not _wait_for_server(base_url, _STARTUP_TIMEOUT, proc):
-        reason = "Streamlit did not respond with HTTP 200 within 60 s"
-        if _ui_mode() == "react":
-            reason = f"FastAPI did not respond with HTTP within {_STARTUP_TIMEOUT:.0f} s"
-        else:
-            if proc is not None and proc.poll() is not None:
-                reason = f"Streamlit process exited early (code {proc.returncode})"
-                wlog = _worker_log_path() if _is_frozen() else None
-                if wlog and wlog.exists():
-                    try:
-                        tail = wlog.read_text(encoding="utf-8", errors="replace")[-2000:]
-                        reason += f"\nWorker log tail:\n{tail}"
-                    except OSError:
-                        pass
+    if not _wait_for_server(_API_SERVER_BASE_URL, _STARTUP_TIMEOUT, proc):
+        reason = f"FastAPI did not respond with HTTP within {_STARTUP_TIMEOUT:.0f} s"
         _log.error("Server wait failed: %s", reason)
         if proc:
             _kill_proc(proc)
@@ -612,8 +466,7 @@ def main() -> None:
 
     _log.info("Server is listening — launching native window")
 
-    url = _API_BROWSER_APP_URL if _ui_mode() == "react" else _STREAMLIT_BROWSER_APP_URL
-    browser_proc, browser_profile = _launch_app_mode_window(url)
+    browser_proc, browser_profile = _launch_app_mode_window(_API_BROWSER_APP_URL)
     if browser_proc:
         _log.info("App-mode window launched (pid %d), waiting for it to close …", browser_proc.pid)
         _wait_for_app_mode_browser_exit(browser_proc, browser_profile)
@@ -661,13 +514,6 @@ def _write_crash_report(text: str) -> None:
 
 if __name__ == "__main__":
     _boot_frozen_traces()
-    if _is_streamlit_worker_argv():
-        _setup_logging()
-        try:
-            _streamlit_worker_entry()
-        finally:
-            logging.shutdown()
-        sys.exit(0)
     try:
         main()
     except Exception:

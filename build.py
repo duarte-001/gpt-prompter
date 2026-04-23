@@ -98,8 +98,7 @@ def _write_spec() -> None:
         for p in sorted((_ROOT / "src").glob("*.py"))
         if p.stem != "__init__"
     ]
-    # Chroma: ProductTelemetryClient via importlib; ServerAPI defaults to chromadb.api.rust.RustBindingsAPI
-    # (string in Settings) so PyInstaller never traces it. chromadb_rust_bindings ships a large .pyd.
+    # Chroma: Rust bindings are selected via Settings string so PyInstaller may not trace them.
     hidden_imports = ["src"] + src_modules + [
         "chromadb.telemetry.product.posthog",
         "chromadb.api.rust",
@@ -115,11 +114,8 @@ def _write_spec() -> None:
         # Same icon as embedded .exe — beside launcher for desktop shortcuts (IconLocation)
         (str(_ROOT / "assets" / "icon.ico"), "."),
         (str(_ROOT / "assets"), "assets"),
-        (str(_ROOT / ".streamlit"), ".streamlit"),
         # React (no-build) frontend served by FastAPI StaticFiles fallback.
         (str(_ROOT / "frontend"), "frontend"),
-        # Streamlit bootstrap needs a real script path on disk; hiddenimports alone
-        # only place modules in the archive (no _internal/src/streamlit_app.py).
         (str(_ROOT / "src"), "src"),
     ]
     datas_str = repr([(s.replace("\\", "/"), d) for s, d in datas])
@@ -128,16 +124,15 @@ def _write_spec() -> None:
         import sys
         sys.setrecursionlimit(sys.getrecursionlimit() * 5)
 
-        from PyInstaller.utils.hooks import collect_all, collect_data_files
+        from PyInstaller.utils.hooks import collect_all
 
-        st_datas, st_binaries, st_hiddenimports = collect_all('streamlit')
         chroma_rust_datas, chroma_rust_binaries, chroma_rust_hiddenimports = collect_all(
             'chromadb_rust_bindings'
         )
 
-        all_datas = st_datas + chroma_rust_datas
-        all_binaries = st_binaries + chroma_rust_binaries
-        all_hiddenimports = st_hiddenimports + chroma_rust_hiddenimports
+        all_datas = chroma_rust_datas
+        all_binaries = chroma_rust_binaries
+        all_hiddenimports = chroma_rust_hiddenimports
 
         block_cipher = None
 
