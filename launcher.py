@@ -394,6 +394,13 @@ def _start_fastapi_server_thread(host: str, port: int) -> tuple[threading.Thread
     Start uvicorn server in a background thread and return (thread, server).
     The returned server object exposes ``should_exit`` to request shutdown.
     """
+    # In PyInstaller windowed mode, sys.stdout/sys.stderr can be None. Uvicorn's
+    # logging setup expects file-like streams (uses .isatty()).
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115
+
     import uvicorn
 
     # Import app lazily so frozen boot stays fast and errors are logged clearly.
@@ -406,6 +413,8 @@ def _start_fastapi_server_thread(host: str, port: int) -> tuple[threading.Thread
         reload=False,
         log_level="info",
         proxy_headers=True,
+        # Avoid color/TTY assumptions in frozen builds.
+        use_colors=False,
     )
     server = uvicorn.Server(cfg)
 

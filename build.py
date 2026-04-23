@@ -59,6 +59,12 @@ def _ensure_build_venv() -> None:
             capture_output=True,
         )
         if chk.returncode == 0:
+            # Keep the build venv in sync with requirements (dependencies change often).
+            subprocess.run(
+                [str(_BUILD_PYTHON), "-m", "pip", "install", "-r", str(_ROOT / "requirements.txt"), "pyinstaller", "-q"],
+                check=True,
+                cwd=str(_ROOT),
+            )
             return
         print("Existing .venv-build is incomplete; recreating …")
         shutil.rmtree(_BUILD_VENV, ignore_errors=True)
