@@ -1,6 +1,9 @@
 # Stock Assistant — brand & UI system
 
-This document defines how the product should look and sound in marketing and in the Streamlit UI. Implementation maps to `.streamlit/config.toml` and light CSS in `src/streamlit_app.py`.
+This document defines how the product should look and sound in marketing and in the UI.
+
+- **Legacy UI:** Streamlit (`src/streamlit_app.py`) + `.streamlit/config.toml`
+- **Current UI:** React (`frontend/`) served by FastAPI (`src/api/app.py`)
 
 ## Positioning
 
@@ -8,7 +11,15 @@ This document defines how the product should look and sound in marketing and in 
 
 **Technical one-liner (README, decks, specs):** An intelligent prompt-generation system that maximizes LLM capabilities for financial reasoning—grounded on reliable data, efficient retrieval, and professional-grade outputs.
 
-**Classic Streamlit UI (`streamlit_app.py`):** Sidebar **Model** + **Prompt generator**; main **caption** explains Yahoo + RAG + export; **Technical details (last reply)** expander (timings, RAG context, JSON) for everyone who wants it; **Export to GPT (last reply)** with **Preview** + **Copy GPT prompt**; spinners for Ollama start and one-time warm-up; `st.rerun()` after each reply and after **Clear chat** (original behaviour).
+**UI principles (applies to Streamlit + React):**
+- **Chat-first**: the assistant message is the source of truth for success/failure (“fetched live data…”, “no tickers found…”, “retrieval unavailable…”).
+- **Export-first**: the user’s primary action is **Copy entire prompt** (no scrolling required; keep the copy CTA close to the composer).
+- **Prompt-only default**: keep the app fast; local answering is an optional mode for power users.
+- **Dev details gated**: technical logs are visible only in **Dev mode**.
+
+**Legacy Streamlit UI (`streamlit_app.py`):** Sidebar controls; chat; technical expander; “Export to GPT” with preview + copy; warm-up spinners.
+
+**Current React UI (`frontend/`):** Single-turn chat experience; horizontal settings bar; sticky export action; Dev mode renders compact “technical cards” (steps, timings, retrieval hits, payload preview).
 
 ## Colour system — Option A (default)
 
@@ -35,6 +46,25 @@ This document defines how the product should look and sound in marketing and in 
 2. **Cyan = signal / insight / emphasis.** Metrics callouts, hover states, success copy for “got it” moments — not for every control.
 3. **Surfaces over decoration.** Prefer the base + surface lift to gradients or extra colours.
 4. **Accessibility:** keep cyan body text large or on strong backgrounds; small cyan on `#111C33` can be marginal depending on weight — prefer cyan for accents, not long paragraphs.
+
+## Colour system — Option A2 (recommended for the React UI)
+
+Option A is intentionally restrained, but the React UI can feel flat if base/surface are too close. Option A2 keeps the same intent while adding depth.
+
+| Role | Hex | Usage |
+|------|-----|--------|
+| **Base** | `#0A0F1A` | Near-black slate background. Avoid pure black; this keeps blue/cyan professional, not neon. |
+| **Surface** | `#0F172A` | Panels/cards. Creates a visible lift over Base. |
+| **Primary** | `#3B82F6` | Primary actions (Ask, Copy). |
+| **Accent** | `#22D3EE` | Signal moments only (status “READY”, key highlights). |
+| **Text** | `#E5E7EB` | Main text. |
+| **Muted** | `#94A3B8` | Secondary text. |
+| **Border** | `#243042` | Slightly more neutral than `#1E293B` for a product-like feel. |
+
+### Rules (Option A2)
+- **Do not use pure black (`#000`)** for the main canvas.
+- Prefer **neutral gray-blue surfaces** over adding more colors.
+- Blue stays “action”; cyan stays “signal”.
 
 ## Typography
 
@@ -73,6 +103,13 @@ Streamlit is not a full design system. We align what we can and avoid fighting t
 | **Widgets** | Most inputs pick up theme colours; some third-party or internal chrome may not match perfectly — acceptable if overall chrome matches Option A. |
 
 When adding new UI, default to **theme tokens** first; introduce **cyan** only for deliberate emphasis.
+
+## React UI constraints (what we own vs accept)
+
+React gives us full control, but we should still keep the product restrained:
+- Prefer **layout hierarchy** (spacing, grouping, cards) over decoration.
+- Keep most pages at a **max width** for readability; use responsive grids inside Dev mode to avoid wasted space.
+- Any new feature should answer: “Does this make export easier, faster, or clearer?”
 
 ## Changelog
 

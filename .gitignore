@@ -13,6 +13,9 @@ data/
 .env
 .env.*
 
+# Logs
+*.log
+
 # Ad-hoc metric exports (use data/exports/ for snapshots you care about)
 /metrics.json
 /metrics_last.csv
@@ -20,6 +23,10 @@ data/
 # IDE
 .idea/
 .vscode/
+
+# OS
+Thumbs.db
+Desktop.ini
 
 # PyInstaller build artifacts
 build/

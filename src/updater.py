@@ -9,6 +9,7 @@ is no network, or the repo is not a git checkout (e.g. PyInstaller bundle).
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -100,6 +101,9 @@ def _ask_user(behind: int) -> bool:
 
 def check_and_update() -> bool:
     """Return True if the app was updated (caller should restart)."""
+    if os.environ.get("STOCK_ASSISTANT_SERVER_MODE", "").strip() == "1":
+        _log.info("Server mode: skipping auto-update.")
+        return False
     if not _git_available() or not _is_git_repo():
         _log.debug("Skipping update check (no git or not a repo).")
         return False

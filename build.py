@@ -116,6 +116,8 @@ def _write_spec() -> None:
         (str(_ROOT / "assets" / "icon.ico"), "."),
         (str(_ROOT / "assets"), "assets"),
         (str(_ROOT / ".streamlit"), ".streamlit"),
+        # React (no-build) frontend served by FastAPI StaticFiles fallback.
+        (str(_ROOT / "frontend"), "frontend"),
         # Streamlit bootstrap needs a real script path on disk; hiddenimports alone
         # only place modules in the archive (no _internal/src/streamlit_app.py).
         (str(_ROOT / "src"), "src"),

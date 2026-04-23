@@ -1,0 +1,19 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8787:8787"
+    environment:
+      STOCK_ASSISTANT_HOST: "0.0.0.0"
+      STOCK_ASSISTANT_PORT: "8787"
+      # Set your keys in an .env file or your hosting platform secrets manager.
+      STOCK_ASSISTANT_API_KEYS: "${STOCK_ASSISTANT_API_KEYS}"
+      # Optional tuning
+      STOCK_ASSISTANT_MAX_BODY_BYTES: "200000"
+      STOCK_ASSISTANT_MAX_INFLIGHT: "12"
+      STOCK_ASSISTANT_WORKERS: "8"
+      STOCK_ASSISTANT_RATE_LIMITS: "1"
+    volumes:
+      # Persist app data (Chroma, caches, logos)
+      - ./data:/app/data
+

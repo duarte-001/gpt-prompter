@@ -14,7 +14,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from src import config
 from src.config import load_alias_index, load_ticker_mapping
@@ -53,37 +53,25 @@ SECTOR_KEYWORDS: dict[str, list[str]] = {
 }
 
 SYSTEM_PROMPT = """\
-You are an analytical assistant for stock and market questions. You focus on \
-facts from live data but are willing to explore risk scenarios and discuss \
-potential implications, always grounded in the available metrics.
+You are an analytical assistant for stock and market questions. Your goal is to initiate a useful finance discussion grounded in the provided live JSON data, and informed by what is happening in the world.
+
+You should attempt to use up-to-date public information (news / macro context / sector developments) when relevant. If you cannot access browsing or you are not sure, say so briefly and continue with a data-grounded answer using the provided JSON.
+
+Hard rules:
+- Do not invent prices, returns, RSI, dates, or other metrics. If you use a number, it must come from live_market_data (JSON) exactly.
 
 Data priority:
-1) LIVE MARKET DATA (JSON) — authoritative for prices, returns, RSI, and dates. \
-Use these numbers exactly.
-2) RETRIEVED CONTEXT — optional notes from past indexed snapshots. May be \
-outdated; use for background only. If it disagrees with live JSON, ignore it.
-3) CONVERSATION CONTEXT — summary of prior exchanges in this session. Use it \
-to understand what the user already discussed and maintain continuity. Refer \
-back to prior topics naturally when relevant.
+1) LIVE MARKET DATA (JSON) — authoritative for all numeric claims (prices/returns/RSI/dates).
+2) RETRIEVAL BACKGROUND — optional qualitative context only; ignore if it conflicts with live data.
+3) CONVERSATION CONTEXT — recent turns + optional session_summary for continuity.
 
-Rules:
-- Do not invent prices or metrics; use only live JSON for numbers.
-- If live data is missing for a symbol, say so clearly.
-- For "good time to invest" or timing questions: give analytical, risk-aware \
-discussion; never guarantee returns or tell the user to buy/sell.
-- Include a short "Sources" line at the end: symbols used, data as-of date \
-from JSON, and whether retrieval was used.
-- Trigger a discussion with the user, not financial advice.
-- Structure: brief answer, bullet facts with labels (from live JSON), then Sources.
-- Classify the asset as: trending up / trending down / bottoming / ranging, based on \
-momentum and RSI (when those fields appear in live JSON).
-After answering, suggest 1–2 follow-up angles the user might explore (e.g., entry \ 
-timing, risk factors given current world context). Make sure to search the web for \
-the latest news for this effect.
+If data is missing or a symbol has errors:
+- Say so explicitly and proceed with what is available.
 
-User messages may include a fenced ```json``` block. Keys include current_question, \
-live_market_data (authoritative for all numbers), retrieval_background, and \
-optionally session_summary when older chat history is not in the thread above."""
+Trend label:
+- Classify each relevant asset as trending_up / trending_down / bottoming / ranging, based on momentum and RSI when present in live_market_data.
+
+User messages may include a fenced ```json``` payload. Keys include current_question, live_market_data (authoritative numbers), retrieval_background, and optionally session_summary."""
 
 
 def should_include_session_summary_for_payload(
@@ -114,6 +102,7 @@ def build_structured_stock_user_content(
     recent_messages: list[dict[str, str]] | None,
     prior_message_count: int | None,
     idx_err: str | None,
+    prompt_size: Literal["small", "medium", "large"] = "large",
 ) -> str:
     """Single user turn: intro line + fenced JSON; live_market_data is full parsed metrics."""
     include_summary = should_include_session_summary_for_payload(
@@ -124,17 +113,86 @@ def build_structured_stock_user_content(
     except json.JSONDecodeError:
         live_data = {"_raw": context_json}
 
+    def _compact_live_market_data(data: Any) -> Any:
+        """
+        Reduce token usage while preserving the most discussion-relevant fields.
+
+        Expected shape from fetcher: a list of {symbol,label,description,summary:{last_date,session:{...}}}.
+        For unknown shapes, return as-is.
+        """
+        if prompt_size != "small":
+            return data
+        if not isinstance(data, list):
+            return data
+        out: list[dict[str, Any]] = []
+        keep_session_keys = (
+            "Adj Close",
+            "Close",
+            "Volume",
+            "rsi_14",
+            "momentum_5d",
+            "momentum_20d",
+            "momentum_60d",
+            "momentum_252d",
+            "smart_money_day",
+            "retail_fomo",
+        )
+        for row in data:
+            if not isinstance(row, dict):
+                continue
+            sym = row.get("symbol")
+            if not sym:
+                continue
+            summ = row.get("summary") if isinstance(row.get("summary"), dict) else {}
+            sess = summ.get("session") if isinstance(summ.get("session"), dict) else {}
+            compact_sess = {k: sess.get(k) for k in keep_session_keys if k in sess}
+            out.append(
+                {
+                    "symbol": sym,
+                    "label": row.get("label"),
+                    "description": row.get("description"),
+                    "last_date": summ.get("last_date"),
+                    "session": compact_sess,
+                    "error": summ.get("error") if isinstance(summ, dict) else None,
+                }
+            )
+        return out
+
+    def _truncate_rag(text: str) -> tuple[str | None, str | None]:
+        t = (text or "").strip()
+        if not t:
+            return None, None
+        # Keep "large" as default: generous cap; small keeps only a short slice.
+        max_chars_by_size: dict[str, int] = {
+            "small": 2000,
+            "medium": 6000,
+            "large": 14000,
+        }
+        cap = max_chars_by_size.get(prompt_size, 14000)
+        if len(t) <= cap:
+            return t, None
+        truncated = t[:cap].rstrip() + "\n\n…(retrieval_background truncated)"
+        note = f"retrieval_background truncated to {cap} chars for prompt_size={prompt_size}"
+        return truncated, note
+
+    live_for_payload = _compact_live_market_data(live_data)
+    rag_for_payload, rag_note = _truncate_rag(rag_text)
+
     payload: dict[str, Any] = {
         "schema_version": 1,
         "current_question": question,
         "symbols_universe": symbols,
-        "live_market_data": live_data,
-        "retrieval_background": rag_text.strip() if rag_text.strip() else None,
+        "live_market_data": live_for_payload,
+        "retrieval_background": rag_for_payload,
     }
     if include_summary:
         payload["session_summary"] = conversation_summary.strip()
     if idx_err:
         payload["indexing_note"] = idx_err
+    if rag_note:
+        payload["retrieval_note"] = rag_note
+    if prompt_size != "large":
+        payload["prompt_size"] = prompt_size
 
     body = json.dumps(payload, ensure_ascii=False, indent=2)
     return (
@@ -358,6 +416,7 @@ def answer_question(
     prior_message_count: int | None = None,
     step_callback: StepCallback | None = None,
     skip_llm: bool = False,
+    prompt_size: Literal["small", "medium", "large"] = "large",
 ) -> QAResult:
     t_total = time.perf_counter()
     timings: dict[str, float] = {}
@@ -561,6 +620,7 @@ def answer_question(
         recent_messages=recent_messages,
         prior_message_count=prior_message_count,
         idx_err=idx_err,
+        prompt_size=prompt_size,
     )
 
     chat_msgs = [{"role": "system", "content": SYSTEM_PROMPT}]
