@@ -14,6 +14,10 @@ Ships as a deterministic pipeline plus UI: optional local **Ollama** answers, or
 
 See `docs/BRANDING.md` for Option A visuals, tone rules, and the technical mapping of these pillars to the pipeline.
 
+## Infra / scaling (when to add Docker or a DB)
+
+This repo is designed to work well as a **single-machine prompt generator**. For the trigger-based guidance on when to introduce Docker, SQLite, or Postgres, see `docs/INFRA_SCALING.md`.
+
 ## Current Recommended Workflow
 
 This repository is currently optimized for **prompt generation + external GPT final answer**:
